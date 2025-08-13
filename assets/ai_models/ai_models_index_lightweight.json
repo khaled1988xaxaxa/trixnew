@@ -1,0 +1,25 @@
+{
+  "export_timestamp": "2025-08-13T00:00:00.000000",
+  "total_models": 2,
+  "lightweight_mode": true,
+  "models": [
+    {
+      "difficulty": "strategicElite",
+      "filename": "policy.pth",
+      "q_table_size": "Variable (Neural Network)",
+      "training_episodes": 300000,
+      "description": "Strategic Elite AI with advanced decision making",
+      "recommended_use": "Strategic elite gameplay for experienced players"
+    },
+    {
+      "difficulty": "humanEnhanced",
+      "filename": "policy.pth",
+      "q_table_size": "Variable (Neural Network)",
+      "training_episodes": 200000,
+      "human_data_samples": 468,
+      "description": "Human-Enhanced PPO AI trained with supervised learning from 468 human card plays",
+      "recommended_use": "Strategic AI with human-like decision patterns and enhanced penalty avoidance"
+    }
+  ],
+  "disabled_models": []
+}

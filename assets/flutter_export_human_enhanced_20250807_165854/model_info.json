@@ -1,0 +1,52 @@
+{
+  "model_name": "Human-Enhanced Fresh PPO",
+  "version": "1.0",
+  "training_date": "2025-08-07T16:58:54.997877",
+  "training_time_seconds": 651.65,
+  "total_timesteps": 200000,
+  "human_insights": {
+    "card_plays": 468,
+    "sessions": 6,
+    "suit_preferences": {
+      "hearts": 128,
+      "clubs": 121,
+      "diamonds": 113,
+      "spades": 106
+    },
+    "rank_preferences": {
+      "ace": 50,
+      "jack": 45,
+      "king": 42,
+      "eight": 39
+    },
+    "strategic_patterns": {
+      "hearts_avoidance": true,
+      "high_card_preference": true,
+      "strategic_play": true
+    }
+  },
+  "hyperparameters": {
+    "learning_rate": 0.0003,
+    "n_steps": 2048,
+    "batch_size": 64,
+    "n_epochs": 10,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": 0.2,
+    "ent_coef": 0.01,
+    "vf_coef": 0.5
+  },
+  "enhancements": [
+    "Human gameplay pattern analysis",
+    "Strategic penalty avoidance",
+    "High-card preference integration",
+    "Hearts avoidance strategy",
+    "Fresh model architecture"
+  ],
+  "performance_expectations": {
+    "strategic_thinking": "Enhanced",
+    "penalty_avoidance": "Improved",
+    "human_like_patterns": "Integrated",
+    "overall_performance": "Expected 20-30% improvement"
+  }
+}

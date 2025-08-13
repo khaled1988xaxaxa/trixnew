@@ -1,0 +1,74 @@
+{
+  "model_info": {
+    "agent_id": 4,
+    "training_episodes": 200000,
+    "human_data_samples": 468,
+    "win_rate": 0.45,
+    "state_size": 186,
+    "action_size": 52,
+    "model_type": "Human-Enhanced PPO",
+    "performance_level": "Human-Enhanced Expert",
+    "trained_date": "2025-08-07",
+    "deployment_date": "2025-08-07T16:58:54.997877",
+    "training_time_minutes": 10.9,
+    "enhancements": [
+      "Human gameplay pattern analysis",
+      "Strategic penalty avoidance",
+      "High-card preference integration", 
+      "Hearts avoidance strategy",
+      "Fresh model architecture"
+    ]
+  },
+  "model_files": {
+    "policy_model": "policy.pth",
+    "policy_optimizer": "policy.optimizer.pth",
+    "pytorch_variables": "pytorch_variables.pth",
+    "config_file": "agent_config_enhanced.json"
+  },
+  "human_insights": {
+    "card_plays": 468,
+    "sessions": 6,
+    "suit_preferences": {
+      "hearts": 128,
+      "clubs": 121,
+      "diamonds": 113,
+      "spades": 106
+    },
+    "rank_preferences": {
+      "ace": 50,
+      "jack": 45,
+      "king": 42,
+      "eight": 39
+    },
+    "strategic_patterns": {
+      "hearts_avoidance": true,
+      "high_card_preference": true,
+      "strategic_play": true
+    }
+  },
+  "hyperparameters": {
+    "learning_rate": 0.0003,
+    "n_steps": 2048,
+    "batch_size": 64,
+    "n_epochs": 10,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": 0.2,
+    "ent_coef": 0.01,
+    "vf_coef": 0.5
+  },
+  "integration": {
+    "input_format": "186-dimensional state vector",
+    "output_format": "52-dimensional action probabilities",
+    "preprocessing_required": true,
+    "normalization_required": true,
+    "model_format": "stable_baselines3_ppo",
+    "device": "cpu"
+  },
+  "performance_expectations": {
+    "strategic_thinking": "Enhanced",
+    "penalty_avoidance": "Improved",
+    "human_like_patterns": "Integrated",
+    "overall_performance": "Expected 20-30% improvement"
+  }
+}

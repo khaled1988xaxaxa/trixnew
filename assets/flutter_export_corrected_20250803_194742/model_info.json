@@ -1,0 +1,32 @@
+{
+  "model_name": "Strategic Trex AI - King of Hearts Corrected",
+  "version": "2.1.0",
+  "training_date": "2025-08-03",
+  "model_type": "PPO",
+  "framework": "stable-baselines3",
+  "performance": {
+    "improvement_over_baseline": "67%",
+    "episode_length_increase": "29%",
+    "strategic_features": 382,
+    "reward_components": 17,
+    "penalty_components": 6
+  },
+  "king_of_hearts_fix": {
+    "penalty_corrected": true,
+    "old_penalty": -15,
+    "new_penalty": -75,
+    "avoidance_reward": 50,
+    "risk_level": 1.0,
+    "training_steps": 50000
+  },
+  "game_modes": [
+    "kingdom",
+    "trex",
+    "queens",
+    "diamonds",
+    "king_of_hearts"
+  ],
+  "observation_space": 382,
+  "action_space": 13,
+  "deployment_ready": true
+}

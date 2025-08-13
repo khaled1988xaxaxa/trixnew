@@ -1,0 +1,4 @@
+# AI-Master Model File
+# This is a placeholder for the new AI-Master model
+# Replace this file with your actual trained PyTorch model (.pt file)
+# The model should be compatible with the Trix game AI inference system

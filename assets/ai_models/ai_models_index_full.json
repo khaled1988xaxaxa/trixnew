@@ -1,0 +1,58 @@
+{
+  "export_timestamp": "2025-08-13T00:00:00.000000",
+  "total_models": 2,
+  "full_mode": true,
+  "models": [
+    {
+      "difficulty": "strategicElite",
+      "filename": "policy.pth",
+      "q_table_size": "Variable (Neural Network)",
+      "training_episodes": 300000,
+      "description": "Strategic Elite AI with advanced decision making",
+      "recommended_use": "Strategic elite gameplay for experienced players",
+      "model_type": "pytorch_enhanced",
+      "model_file": "policy.pth",
+      "enhancements": [
+        "Penalty prediction and avoidance",
+        "Strategic card management",
+        "Dynamic opponent modeling",
+        "Hearts avoidance strategy"
+      ],
+      "performance_level": "Strategic Elite",
+      "training_date": "2025-08-01",
+      "expected_improvement": "25-35% better performance"
+    },
+    {
+      "difficulty": "humanEnhanced",
+      "filename": "policy.pth",
+      "q_table_size": "Variable (Neural Network)",
+      "training_episodes": 200000,
+      "human_data_samples": 468,
+      "description": "Human-Enhanced PPO AI trained with supervised learning from 468 human card plays",
+      "recommended_use": "Strategic AI with human-like decision patterns and enhanced penalty avoidance",
+      "model_type": "pytorch_enhanced",
+      "model_file": "policy.pth",
+      "enhancements": [
+        "Human gameplay pattern analysis",
+        "Strategic penalty avoidance", 
+        "High-card preference integration",
+        "Hearts avoidance strategy"
+      ],
+      "performance_level": "Human-Enhanced Expert",
+      "training_date": "2025-08-07",
+      "expected_improvement": "20-30% better performance"
+    }
+  ],
+  "usage_guide": {
+    "description": "Strategic and Human-Enhanced AI models for Trix card game",
+    "integration": "Models are ready for Flutter integration",
+    "difficulty_levels": {
+      "strategicElite": "Strategic Elite AI with advanced decision making",
+      "humanEnhanced": "Human-Enhanced AI trained with supervised learning - Strategic and human-like play"
+    },
+    "recommended_progression": [
+      "Use Strategic Elite for competitive gameplay",
+      "Try Human-Enhanced for strategic human-like gameplay with improved penalty avoidance"
+    ]
+  }
+}

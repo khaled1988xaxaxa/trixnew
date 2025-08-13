@@ -1,0 +1,18 @@
+{
+  "model_type": "PPO_Strategic_Enhanced",
+  "observation_space": "Dict('aggressive_window': Box(0.0, 1.0, (1,), float32), 'bluffing_opportunity': Box(0.0, 1.0, (1,), float32), 'defensive_posture': Box(0.0, 1.0, (1,), float32), 'endgame_planning': Box(0.0, 1.0, (52,), float32), 'game_mode_encoding': Box(0.0, 1.0, (5,), float32), 'game_phase': Box(0.0, 1.0, (3,), float32), 'hand_cards': Box(0.0, 1.0, (52,), float32), 'high_card_tracking': Box(0.0, 1.0, (13,), float32), 'opponent_aggression': Box(0.0, 1.0, (3,), float32), 'opponent_style': Box(0.0, 1.0, (9,), float32), 'penalty_risk': Box(0.0, 1.0, (52,), float32), 'played_cards': Box(0.0, 1.0, (52,), float32), 'player_position': Box(0.0, 1.0, (4,), float32), 'round_progress': Box(0.0, 1.0, (1,), float32), 'scoring_pressure': Box(0.0, 1.0, (4,), float32), 'suit_void_tracking': Box(0.0, 1.0, (12,), float32), 'trick_history': Box(0.0, 1.0, (52,), float32), 'trick_patterns': Box(0.0, 1.0, (12,), float32), 'trick_progress': Box(0.0, 1.0, (1,), float32), 'valid_actions': Box(0.0, 1.0, (52,), float32))",
+  "action_space": "Discrete(52)",
+  "training_steps": 100000,
+  "strategic_features": 382,
+  "performance_improvement": "67% reward increase",
+  "export_timestamp": "20250803_160518",
+  "expected_performance": "60-70% human level",
+  "strategic_capabilities": [
+    "Penalty card avoidance",
+    "Game phase adaptation",
+    "Opponent modeling",
+    "Risk assessment",
+    "Strategic planning",
+    "Endgame optimization"
+  ]
+}

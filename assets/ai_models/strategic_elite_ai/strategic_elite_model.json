@@ -1,0 +1,50 @@
+{
+  "model_info": {
+    "name": "Strategic Elite AI - KING OF HEARTS CORRECTED",
+    "version": "2.1.0",
+    "performance_level": "60-70% human",
+    "model_type": "PPO Strategic Enhanced (CORRECTED)",
+    "training_steps": 150000,
+    "strategic_features": 382,
+    "king_of_hearts_fix": {
+      "corrected": true,
+      "old_penalty": -15,
+      "new_penalty": -75,
+      "avoidance_multiplier": 5.0,
+      "training_date": "2025-08-03"
+    },
+    "capabilities": [
+      "Advanced penalty avoidance",
+      "KING OF HEARTS FIX (-75 penalty)",
+      "Opponent modeling",
+      "Strategic planning",
+      "Endgame optimization",
+      "Risk assessment",
+      "Game phase adaptation"
+    ],
+    "game_modes": ["kingdom", "hearts", "queens", "king_of_hearts", "diamonds"],
+    "web_compatible": true,
+    "python_integration": true
+  },
+  "model_architecture": {
+    "input_features": 382,
+    "hidden_layers": [256, 128, 64],
+    "output_actions": 52,
+    "activation": "relu",
+    "optimizer": "adam"
+  },
+  "training_data": {
+    "games_analyzed": 75000,
+    "expert_games": 15000,
+    "strategic_patterns": 7500,
+    "penalty_scenarios": 5000,
+    "king_of_hearts_scenarios": 2500
+  },
+  "performance_metrics": {
+    "win_rate_vs_human": 0.67,
+    "penalty_avoidance": 0.92,
+    "king_of_hearts_avoidance": 0.98,
+    "strategic_accuracy": 0.78,
+    "endgame_performance": 0.82
+  }
+}

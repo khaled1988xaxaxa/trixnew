@@ -1,0 +1,24 @@
+{
+  "model_info": {
+    "agent_id": 3,
+    "training_episodes": 50000,
+    "win_rate": 0.317,
+    "state_size": 186,
+    "action_size": 52,
+    "model_type": "PPO",
+    "performance_level": "Advanced Beginner",
+    "trained_date": "2025-01-05",
+    "deployment_date": "2025-07-05T10:57:46.726446"
+  },
+  "model_files": {
+    "torchscript_model": "trix_agent_model.pt",
+    "full_model": "trix_agent_full.pt",
+    "config_file": "agent_config.json"
+  },
+  "integration": {
+    "input_format": "186-dimensional state vector",
+    "output_format": "52-dimensional action probabilities",
+    "preprocessing_required": true,
+    "normalization_required": true
+  }
+}
