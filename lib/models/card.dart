@@ -133,4 +133,20 @@ class Card {
 
   @override
   int get hashCode => suit.hashCode ^ rank.hashCode;
+
+  /// Convert card to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'suit': suit.name,
+      'rank': rank.name,
+    };
+  }
+
+  /// Create card from JSON
+  static Card fromJson(Map<String, dynamic> json) {
+    return Card(
+      suit: Suit.values.firstWhere((s) => s.name == json['suit']),
+      rank: Rank.values.firstWhere((r) => r.name == json['rank']),
+    );
+  }
 }

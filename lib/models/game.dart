@@ -166,6 +166,35 @@ class Trick {
     winner = winningPosition;
     return winningPosition;
   }
+
+  /// Convert trick to JSON
+  Map<String, dynamic> toJson() {
+    return {
+      'cards': cards.map((position, card) => MapEntry(position.name, card.toJson())),
+      'winner': winner?.name,
+      'leadPlayer': leadPlayer.name,
+    };
+  }
+
+  /// Create trick from JSON
+  static Trick fromJson(Map<String, dynamic> json) {
+    final trick = Trick(
+      leadPlayer: PlayerPosition.values.firstWhere((p) => p.name == json['leadPlayer']),
+    );
+    
+    final cardsMap = json['cards'] as Map<String, dynamic>;
+    for (final entry in cardsMap.entries) {
+      final position = PlayerPosition.values.firstWhere((p) => p.name == entry.key);
+      final card = Card.fromJson(entry.value);
+      trick.addCard(position, card);
+    }
+    
+    if (json['winner'] != null) {
+      trick.winner = PlayerPosition.values.firstWhere((p) => p.name == json['winner']);
+    }
+    
+    return trick;
+  }
 }
 
 class TrexGame {

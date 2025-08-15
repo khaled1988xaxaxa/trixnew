@@ -6,11 +6,13 @@ import 'package:provider/provider.dart';
 import 'providers/game_provider.dart';
 import 'providers/ai_provider.dart';
 import 'providers/ai_logging_provider.dart';
+import 'providers/multiplayer_provider.dart';
 import 'services/game_logging_service.dart';
 import 'screens/home_screen.dart';
 import 'screens/game_screen.dart';
 import 'screens/ai_game_setup_screen.dart';
 import 'screens/logging_settings_screen.dart';
+import 'screens/multiplayer_lobby_screen.dart';
 
 void main() async {
   // Ensure Flutter is initialized properly to fix debugging context issues
@@ -52,6 +54,7 @@ class TrixApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => GameProvider()),
         ChangeNotifierProvider(create: (_) => AIProvider()),
         ChangeNotifierProvider(create: (_) => AILoggingProvider()),
+        ChangeNotifierProvider(create: (_) => MultiplayerProvider()),
       ],
       child: MaterialApp(
         title: 'تريكس - لعبة الورق العربية',
@@ -123,6 +126,7 @@ class TrixApp extends StatelessWidget {
           '/game': (context) => const GameScreen(),
           '/ai-game-setup': (context) => const AIGameSetupScreen(),
           '/logging_settings': (context) => const LoggingSettingsScreen(),
+          '/multiplayer-lobby': (context) => const MultiplayerLobbyScreen(),
         },
       ),
     );

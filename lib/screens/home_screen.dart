@@ -269,6 +269,35 @@ class _HomeScreenState extends State<HomeScreen> {
 
                   SizedBox(height: MediaQuery.of(context).size.height * 0.015),
 
+                  // Multiplayer Button
+                  SizedBox(
+                    width: double.infinity,
+                    height: 50,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pushNamed(context, '/multiplayer-lobby');
+                      },
+                      icon: const Icon(Icons.people, size: 20),
+                      label: const Text(
+                        'Multiplayer',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(15),
+                        ),
+                        elevation: 5,
+                      ),
+                    ),
+                  ),
+
+                  SizedBox(height: MediaQuery.of(context).size.height * 0.015),
+
                   // Game Rules Button
                   SizedBox(
                     width: double.infinity,
