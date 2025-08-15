@@ -1,3 +1,5 @@
+// ignore_for_file: depend_on_referenced_packages, uri_does_not_exist, undefined_class, undefined_identifier, constant_identifier_names, avoid_print
+
 import 'dart:typed_data';
 import 'package:pytorch_lite/pytorch_lite.dart';
 

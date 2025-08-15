@@ -120,6 +120,32 @@ class Card {
 
   bool get isKingOfHearts => suit == Suit.hearts && rank == Rank.king;
 
+  /// Helpers for Jack-hierarchy (شايب) contract demo
+  bool get isJackHierarchyCard => rank == Rank.jack || rank == Rank.ten || rank == Rank.queen;
+
+  /// A simple sequence order string used by the demo UI
+  String get sequenceOrder {
+    switch (rank) {
+      case Rank.ten:
+        return 'Ten';
+      case Rank.jack:
+        return 'Jack';
+      case Rank.queen:
+        return 'Queen';
+      default:
+        return rank.englishName;
+    }
+  }
+
+  /// Determine if this card can be placed after [other] in the Jack-hierarchy sequence
+  /// Sequence must be Ten -> Jack -> Queen and cards must be of the same suit
+  bool canPlaceAfterInSequence(Card other) {
+    if (suit != other.suit) return false;
+    if (other.rank == Rank.ten && rank == Rank.jack) return true;
+    if (other.rank == Rank.jack && rank == Rank.queen) return true;
+    return false;
+  }
+
   @override
   String toString() => '${rank.englishName} of ${suit.englishName}';
 

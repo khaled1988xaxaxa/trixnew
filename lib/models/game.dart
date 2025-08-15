@@ -740,6 +740,13 @@ class TrexGame {
   }
 
   Player getPlayerByPosition(PlayerPosition position) {
+    if (kDebugMode) {
+      print('🔍 getPlayerByPosition called for: $position');
+      print('🔍 Available players:');
+      for (var player in players) {
+        print('   - ${player.name}: ${player.position}');
+      }
+    }
     return players.firstWhere((player) => player.position == position);
   }
 

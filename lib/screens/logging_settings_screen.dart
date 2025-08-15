@@ -277,7 +277,7 @@ class _LoggingSettingsScreenState extends State<LoggingSettingsScreen> {
     );
   }
 
-  Future<void> _exportTrainingData(GameProvider gameProvider) async {
+  Future<void> _exportTrainingData(dynamic gameProvider) async {
     setState(() {
       _isExporting = true;
     });
@@ -368,7 +368,7 @@ class _LoggingSettingsScreenState extends State<LoggingSettingsScreen> {
     }
   }
 
-  Future<void> _showLogsDirectory(GameProvider gameProvider) async {
+  Future<void> _showLogsDirectory(dynamic gameProvider) async {
     try {
       final logsDir = await gameProvider.getLogsDirectory();
       

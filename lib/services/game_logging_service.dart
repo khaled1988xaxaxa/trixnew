@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart';
 import 'package:path_provider/path_provider.dart';
@@ -215,9 +216,15 @@ class GameLoggingService {
 
   /// Initialize local SQLite database
   Future<void> _initializeDatabase() async {
+    if (kIsWeb) {
+      if (kDebugMode) print('📁 GameLoggingService: skipping DB initialization on web');
+      _database = null;
+      return;
+    }
+
     final documentsDirectory = await getApplicationDocumentsDirectory();
     final path = join(documentsDirectory.path, 'ai_training_logs.db');
-    
+
     _database = await openDatabase(
       path,
       version: 1,

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
@@ -12,7 +13,6 @@ import '../models/game_log_models.dart';
 import '../models/multiplayer_models.dart';
 import '../widgets/playing_card_widget.dart';
 import '../widgets/contract_selection_widget.dart';
-import '../widgets/ai_difficulty_indicator.dart';
 
 class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
@@ -24,6 +24,7 @@ class GameScreen extends StatefulWidget {
 class _GameScreenState extends State<GameScreen> {
   bool _showDebugHands = false; // Debug flag to show/hide AI hands
   bool _isCheckingGameState = false;
+  StreamSubscription<MultiplayerGameState>? _gameStateSubscription;
 
   @override
   void initState() {
@@ -118,13 +119,36 @@ class _GameScreenState extends State<GameScreen> {
     }
     
     try {
-      final room = arguments['room'] as GameRoom?;
-      if (room == null) {
+      final roomData = arguments['room'];
+      final serverGameState = arguments['gameState'];
+      
+      if (roomData == null) {
         if (kDebugMode) print('❌ No room data provided for multiplayer game');
         return;
       }
       
-      if (kDebugMode) print('🎮 Setting up multiplayer game for room: ${room.name}');
+      if (serverGameState == null) {
+        if (kDebugMode) print('❌ No server game state provided for multiplayer game');
+        return;
+      }
+      
+      // Convert room data to GameRoom object
+      final GameRoom room;
+      if (roomData is GameRoom) {
+        room = roomData;
+      } else if (roomData is Map<String, dynamic>) {
+        room = GameRoom.fromJson(roomData);
+      } else {
+        if (kDebugMode) print('❌ Invalid room data type: ${roomData.runtimeType}');
+        return;
+      }
+      
+      if (kDebugMode) {
+        print('🎮 Setting up multiplayer game for room: ${room.name}');
+        print('🎯 Server game state received: ${serverGameState.runtimeType}');
+        print('🎯 Game phase: ${serverGameState['phase']}');
+        print('🎯 Current contract: ${serverGameState['currentContract']}');
+      }
       
       // Convert multiplayer PlayerSessions to game Players
       final players = <Player>[];
@@ -159,8 +183,14 @@ class _GameScreenState extends State<GameScreen> {
         print('🎮 Other players: ${otherPlayers.map((p) => '${p.name} (${p.position.name})').join(', ')}');
       }
       
-      // Start the multiplayer game
-      await gameProvider.startNewGame(humanPlayer, otherPlayers);
+      // Get multiplayer service
+      final multiplayerService = multiplayerProvider.multiplayerService;
+      
+      // Initialize multiplayer game with server's game state instead of creating new one
+      await gameProvider.initializeMultiplayerGame(humanPlayer, otherPlayers, serverGameState, multiplayerService);
+      
+      // Set up game state stream listener for real-time updates
+      _setupGameStateListener(multiplayerService, gameProvider);
       
       if (kDebugMode) print('✅ Multiplayer game setup complete');
     } catch (e) {
@@ -1832,22 +1862,110 @@ class _GameScreenState extends State<GameScreen> {
     }).toList();
   }
   
-  Widget _buildFloatingElements(BuildContext context, TrexGame game, GameProvider gameProvider) {
+  Widget _buildFloatingElements(BuildContext context, TrexGame game, dynamic gameProvider) {
     return Stack(
       children: [
-        // Kingdom info widget removed
-
-        // Contract selection widget
-        if (game.phase == GamePhase.contractSelection && 
-            game.currentPlayer == PlayerPosition.south)
+        // Contract selection widget - Only show when it's human player's turn
+        if (game.phase == GamePhase.contractSelection && gameProvider.isHumanPlayerTurn)
           Positioned(
             bottom: 250,
             left: 20,
             right: 20,
-            child: ContractSelectionWidget(
-              onContractSelected: (contract) => gameProvider.selectContract(contract),
-              availableContracts: game.availableContracts,
-              currentKing: game.currentKing,
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.green.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'CONTRACT SELECTION - YOUR TURN',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    'Current King: ${game.currentKing}',
+                    style: TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  Text(
+                    'Turn Detection: ${gameProvider.isHumanPlayerTurn ? "YOUR TURN" : "NOT YOUR TURN"}',
+                    style: TextStyle(
+                      color: gameProvider.isHumanPlayerTurn ? Colors.yellow : Colors.red,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 15),
+                  ContractSelectionWidget(
+                    onContractSelected: (contract) {
+                      // Access multiplayer service for contract selection
+                      final multiplayerProvider = Provider.of<MultiplayerProvider>(context, listen: false);
+                      final multiplayerService = multiplayerProvider.multiplayerService;
+                      
+                      try {
+                        String contractName;
+                        if (contract.toString().contains('TrexContract.')) {
+                          contractName = contract.toString().split('.').last;
+                        } else {
+                          contractName = contract.toString();
+                        }
+                        
+                        if (kDebugMode) print('📤 Sending contract selection: $contractName');
+                        multiplayerService.selectContract(contractName);
+                      } catch (e) {
+                        if (kDebugMode) print('❌ Error selecting contract: $e');
+                        // Fallback to game provider for single player
+                        gameProvider.selectContract(contract);
+                      }
+                    },
+                    availableContracts: game.availableContracts,
+                    currentKing: game.currentKing,
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+        // Waiting message for contract selection when it's not player's turn
+        if (game.phase == GamePhase.contractSelection && !gameProvider.isHumanPlayerTurn)
+          Positioned(
+            bottom: 250,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(15),
+                border: Border.all(color: Colors.white, width: 2),
+              ),
+              child: Column(
+                children: [
+                  Text(
+                    'WAITING FOR CONTRACT SELECTION',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  SizedBox(height: 10),
+                  Text(
+                    'Current King: ${game.currentKing}',
+                    style: TextStyle(color: Colors.white, fontSize: 14),
+                  ),
+                  Text(
+                    'Waiting for ${game.currentKing.toString().split('.').last} to choose...',
+                    style: TextStyle(color: Colors.yellow, fontSize: 14),
+                  ),
+                ],
+              ),
             ),
           ),
 
@@ -2003,7 +2121,7 @@ class _GameScreenState extends State<GameScreen> {
     gameProvider.playCard(card);
   }
 
-  Future<void> _logHumanCardPlay(AILoggingProvider loggingProvider, GameProvider gameProvider, game_card.Card card) async {
+  Future<void> _logHumanCardPlay(AILoggingProvider loggingProvider, dynamic gameProvider, game_card.Card card) async {
     if (!loggingProvider.isEnabled) return;
     
     final game = gameProvider.game;
@@ -2334,5 +2452,45 @@ class _GameScreenState extends State<GameScreen> {
       default:
         return game_card.Rank.jack; // Should not happen in Trex
     }
+  }
+  
+  /// Set up game state stream listener for real-time updates
+  void _setupGameStateListener(dynamic multiplayerService, GameProvider gameProvider) {
+    // Cancel any existing subscription
+    _gameStateSubscription?.cancel();
+    
+    if (multiplayerService?.gameStateStream != null) {
+      _gameStateSubscription = multiplayerService.gameStateStream.listen((MultiplayerGameState gameState) {
+        if (kDebugMode) {
+          print('🔄 Received game state update in GameScreen');
+          print('   - Phase: ${gameState.phase.englishName}');
+          print('   - Current king: ${gameState.currentKing}');
+          print('   - Current player: ${gameState.currentPlayer}');
+        }
+        
+        // Update the game provider with the new game state
+        // Use machine-friendly enum names so the provider can parse reliably
+        final serverGameState = {
+          'phase': gameState.phase.name,
+          'currentContract': gameState.currentContract?.name,
+          'currentKing': gameState.currentKing.name,
+          'currentPlayer': gameState.currentPlayer.name,
+          'round': gameState.round,
+          'kingdom': gameState.kingdom,
+        };
+        
+        gameProvider.updateGameState(serverGameState);
+      });
+      
+      if (kDebugMode) print('✅ Game state listener set up successfully');
+    } else {
+      if (kDebugMode) print('❌ Multiplayer service or game state stream not available');
+    }
+  }
+  
+  @override
+  void dispose() {
+    _gameStateSubscription?.cancel();
+    super.dispose();
   }
 }

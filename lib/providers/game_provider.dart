@@ -1,987 +1,545 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../models/game.dart';
 import '../models/player.dart';
 import '../models/card.dart';
-import '../services/ai_service.dart';
-import '../services/lightweight_ai_adapter.dart';
-import '../services/game_logger.dart';
 
+/// Unified game provider that delegates to either single-player or multiplayer provider
 class GameProvider with ChangeNotifier {
-  TrexGame? _game;
+  bool _isMultiplayer = false;
   bool _isLoading = false;
   String? _errorMessage;
-  AIService? _aiService;
-  final GameLogger _logger = GameLogger();
-  DateTime? _actionStartTime; // Track thinking time
-
-  TrexGame? get game => _game;
+  Timer? _aiMoveTimer;
+  
+  // Game state
+  TrexGame? _currentGame;
+  Player? _currentUser;
+  List<Player> _allPlayers = [];
+  dynamic _multiplayerService; // Store multiplayer service for AI moves
+  
+  // Basic getters
   bool get isLoading => _isLoading;
   String? get errorMessage => _errorMessage;
-  bool get hasActiveGame {
-    if (kDebugMode) {
-      print('🎮 hasActiveGame check: _game is null? ${_game == null}');
-      if (_game != null) {
-        print('   Game details: Phase=${_game!.phase.englishName}, ' 'Players=${_game!.players.length}, ' +
-              'Current player=${_game!.currentPlayer.englishName}');
-      }
+  bool get hasActiveGame => _currentGame != null; // Now properly implemented
+  bool get isHumanPlayerTurn {
+    if (!hasActiveGame || _currentUser == null) {
+      if (kDebugMode) print('🔍 isHumanPlayerTurn: No active game or user - returning false');
+      return false;
     }
-    // Only check for null game, not empty hands (empty hands are normal at end of rounds)
-    return _game != null;
+    
+    // In contract selection phase, check if current king is the human player
+    if (_currentGame!.phase == GamePhase.contractSelection) {
+      final result = _currentGame!.currentKing == _currentUser!.position;
+      if (kDebugMode) {
+        print('🔍 isHumanPlayerTurn: Contract selection phase');
+        print('   - Current king: ${_currentGame!.currentKing}');
+        print('   - Human position: ${_currentUser!.position}');
+        print('   - Result: $result');
+      }
+      return result;
+    }
+    
+    // In playing phase, check if current player is the human player
+    if (_currentGame!.phase == GamePhase.playing) {
+      final result = _currentGame!.currentPlayer == _currentUser!.position;
+      if (kDebugMode) {
+        print('🔍 isHumanPlayerTurn: Playing phase');
+        print('   - Current player: ${_currentGame!.currentPlayer}');
+        print('   - Human position: ${_currentUser!.position}');
+        print('   - Result: $result');
+      }
+      return result;
+    }
+    
+    if (kDebugMode) print('🔍 isHumanPlayerTurn: Unknown phase - returning false');
+    return false;
   }
 
-  Player? get currentUser => _game?.players.firstWhere(
-    (player) => player.position == PlayerPosition.south,
-    orElse: () => _game!.players.first,
-  );
-
-  Future<void> startNewGame(Player humanPlayer, List<Player> aiPlayers) async {
+  // Force a UI update to check the getter
+  void debugCheckTurn() {
     if (kDebugMode) {
-      print('🎮 ===== START NEW GAME CALLED (with players) =====');
-      print('🎮 Method signature: startNewGame(Player, List<Player>)');
-      print('🎮 Human player: "${humanPlayer.name}" (${humanPlayer.position.name})');
-      print('🎮 AI players count: ${aiPlayers.length}');
-      for (int i = 0; i < aiPlayers.length; i++) {
-        print('🎮   AI[$i]: "${aiPlayers[i].name}" (${aiPlayers[i].position.name})');
+      print('🔍 DEBUG: Manually checking isHumanPlayerTurn...');
+      print('🔍 DEBUG: isHumanPlayerTurn = $isHumanPlayerTurn');
+    }
+    notifyListeners();
+  }
+  bool get isMultiplayerGame => _isMultiplayer;
+  bool get shouldHighlightCards => hasActiveGame && isHumanPlayerTurn;
+  bool get canHumanPlayerPass => hasActiveGame && isHumanPlayerTurn;
+  bool get isLoggingEnabled => false; // TODO: Implement logging
+  bool get isLightweightAIMode => false; // TODO: Implement AI mode detection
+  
+  /// Check if the current king/player is an AI
+  bool get isCurrentPlayerAI {
+    if (!hasActiveGame) return false;
+    
+    PlayerPosition? targetPosition;
+    
+    // In contract selection phase, check current king
+    if (_currentGame!.phase == GamePhase.contractSelection) {
+      targetPosition = _currentGame!.currentKing;
+    } else if (_currentGame!.phase == GamePhase.playing) {
+      targetPosition = _currentGame!.currentPlayer;
+    }
+    
+    if (targetPosition == null) return false;
+    
+    // Check if this position belongs to an AI player
+    final playerAtPosition = getPlayerByPosition(targetPosition);
+    return playerAtPosition?.id.startsWith('ai_') ?? false;
+  }
+  
+  /// Get player by position
+  Player? getPlayerByPosition(PlayerPosition position) {
+    if (kDebugMode) {
+      print('🔍 getPlayerByPosition called for: $position');
+      print('🔍 Available players:');
+      for (var player in _allPlayers) {
+        print('   - ${player.name}: ${player.position}');
       }
-      print('🎮 ================================================');
+    }
+    
+    try {
+      return _allPlayers.firstWhere((player) => player.position == position);
+    } catch (e) {
+      if (kDebugMode) print('🔍 No player found at position $position');
+      return null;
+    }
+  }
+  
+  // Game object
+  TrexGame? get game => _currentGame;
+  
+  // Current user object
+  Player? get currentUser => _currentUser;
+  dynamic get humanPlayerPosition => null; // TODO: Implement
+  
+  List<Card> getValidCardsForHuman() {
+    if (_currentUser == null) return [];
+    return _currentUser!.hand; // Return all cards for now - you can add validation logic later
+  }
+  
+  void passTrexTurn() {
+    if (kDebugMode) print('🎮 Pass Trex turn not implemented yet');
+  }
+  
+  void doubleKingOfHearts() {
+    if (kDebugMode) print('🎮 Double King of Hearts not implemented yet');
+  }
+  
+  Future<void> setLoggingEnabled(bool enabled) async {
+    if (kDebugMode) print('🎮 Set logging enabled: $enabled');
+  }
+  
+  Future<String?> exportTrainingData() async {
+    if (kDebugMode) print('🎮 Export training data not implemented yet');
+    return null;
+  }
+  
+  Future<String?> getLogsDirectory() async {
+    if (kDebugMode) print('🎮 Get logs directory not implemented yet');
+    return null;
+  }
+  
+  Future<void> reinitializeAIService() async {
+    if (kDebugMode) print('🎮 Reinitialize AI service not implemented yet');
+  }
+  
+  Future<Map<String, dynamic>> testAIConnection() async {
+    if (kDebugMode) print('🎮 Test AI connection not implemented yet');
+    return {'success': false, 'message': 'Not implemented'};
+  }
+
+  /// UI integration helpers used by logging-aware widgets
+  void startThinkingTimer() {
+    if (kDebugMode) print('⏱️ startThinkingTimer called');
+  }
+
+  void resetThinkingTimer() {
+    if (kDebugMode) print('⏱️ resetThinkingTimer called');
+  }
+
+  /// Initialize single-player game
+  Future<void> startNewGame(Player humanPlayer, List<Player> aiPlayers) async {
+    _isMultiplayer = false;
+    if (kDebugMode) print('🎮 Single-player game initialization not implemented yet');
+    notifyListeners();
+  }
+
+  /// Initialize multiplayer game
+  Future<void> initializeMultiplayerGame(dynamic humanPlayer, List<dynamic> aiPlayers, Map<String, dynamic> serverGameState, dynamic multiplayerService) async {
+    if (kDebugMode) {
+      print('🎮 ===== INITIALIZING MULTIPLAYER GAME =====');
+      print('🎮 Human player: $humanPlayer');
+      print('🎮 AI players: ${aiPlayers.length}');
+      print('🎮 Server game state: $serverGameState');
+      print('🎮 ==========================================');
     }
     
     _isLoading = true;
     _errorMessage = null;
+    _multiplayerService = multiplayerService; // Store for AI moves
     notifyListeners();
-
+    
     try {
-      // Initialize logging system
-      await _logger.initialize();
+      _isMultiplayer = true;
       
-      await reinitializeAIService();
+      // Create Player objects from server data with correct positions and hands
+      List<Player> gamePlayersList = [];
       
-      final players = [humanPlayer, ...aiPlayers];
-
-      // Verify that we have 4 players total
-      if (players.length != 4) {
-        throw Exception('Invalid number of players: ${players.length}. Expected 4.');
-      }
-      
-      // Check that all positions are assigned and unique
-      final positionSet = players.map((p) => p.position).toSet();
-      if (positionSet.length != 4) {
-        throw Exception('Duplicate or missing player positions found. Positions: ${players.map((p) => p.position.name).join(', ')}');
-      }
-      
-      // Verify all required positions are present
-      final requiredPositions = {PlayerPosition.south, PlayerPosition.west, PlayerPosition.north, PlayerPosition.east};
-      if (!positionSet.containsAll(requiredPositions)) {
-        throw Exception('Missing required positions. Found: ${positionSet.map((p) => p.name).join(', ')}');
-      }
-
-      if (kDebugMode) {
-        print('🎮 Players validated: ${players.map((p) => "${p.name} (${p.position.name})").join(', ')}');
-      }
-
-      _game = TrexGame(players: players, firstKing: PlayerPosition.south); // Temp king
-      
-      if (_game == null) {
-        throw Exception('Failed to create game object.');
-      }
-
-      if (kDebugMode) {
-        print('✅ Game object created successfully');
-      }
-      
-      _game!.dealCards();
-      if (kDebugMode) {
-        print('✅ Cards dealt successfully');
-      }
-      
-      _findFirstKing();
-      _game!.startContractSelection();
-      
-      if (kDebugMode) {
-        print('✅ Game setup complete. Phase: ${_game!.phase.englishName}, Current Player: ${_game!.currentPlayer.englishName}');
-      }
-
-      _isLoading = false;
-      // This is the most critical notification. It tells the UI that the game is ready.
-      notifyListeners(); 
-      
-      // This delay gives the UI a moment to react before bot actions start.
-      await Future.delayed(const Duration(milliseconds: 100));
-      
-      // The check inside the method was causing a premature failure. 
-      // The state will be validated by the UI that consumes this provider.
-      _handleBotActions();
-
-    } catch (e, s) {
-      _isLoading = false;
-      _game = null; // Explicitly nullify the game on error
-      _errorMessage = 'Error creating game: ${e.toString()}';
-      if (kDebugMode) {
-        print('❌ ===== ERROR IN startNewGame =====');
-        print('❌ Error: $e');
-        print('❌ Stack Trace: $s');
-        print('❌ =====================================');
-      }
-      notifyListeners();
-      rethrow;
-    }
-  }
-
-  void _findFirstKing() {
-    if (_game == null) {
-      if (kDebugMode) print('❌ Error: Game is null in _findFirstKing');
-      return;
-    }
-    
-    if (_game!.players.any((p) => p.hand.isEmpty)) {
-      if (kDebugMode) {
-        print('⚠️ Warning: Some players have empty hands');
-      }
-    }
-    
-    PlayerPosition? firstKing;
-    Card? lowestSpade;
-    
-    for (Player player in _game!.players) {
-      for (Card card in player.hand) {
-        if (card.suit == Suit.spades) {
-          if (lowestSpade == null || card.rank.value < lowestSpade.rank.value) {
-            lowestSpade = card;
-            firstKing = player.position;
-          }
+      // Helper function to parse suit from server data
+      Suit parseSuit(String suitStr) {
+        switch (suitStr.toLowerCase()) {
+          case 'hearts': return Suit.hearts;
+          case 'diamonds': return Suit.diamonds;
+          case 'clubs': return Suit.clubs;
+          case 'spades': return Suit.spades;
+          default: return Suit.hearts;
         }
       }
-    }
-    
-    if (firstKing == null) {
-      if (kDebugMode) print('⚠️ Warning: No spades found, using south as default king');
-      firstKing = PlayerPosition.south;
-    }
-    
-    _game!.currentKing = firstKing;
-    _game!.currentPlayer = firstKing;
-    
-    if (kDebugMode) {
-      print('👑 First king determined: ${_game!.currentKing.englishName}');
-    }
-  }
-
-  void selectContract(TrexContract contract) {
-    if (_game == null || _game!.phase != GamePhase.contractSelection) return;
-    
-    // Log thinking time if we were tracking it
-    if (_actionStartTime != null) {
-      final thinkingTime = DateTime.now().difference(_actionStartTime!);
-      _logger.logThinkingTime('contract_selection', thinkingTime, {
-        'available_contracts': _game!.availableContracts.map((c) => c.name).toList(),
-        'selected_contract': contract.name,
-      });
-    }
-    
-    try {
-      // Log the contract selection
-      final humanPlayer = currentUser;
+      
+      // Helper function to parse rank from server data
+      Rank parseRank(String rankStr) {
+        switch (rankStr.toLowerCase()) {
+          case 'ace': return Rank.ace;
+          case 'two': return Rank.two;
+          case 'three': return Rank.three;
+          case 'four': return Rank.four;
+          case 'five': return Rank.five;
+          case 'six': return Rank.six;
+          case 'seven': return Rank.seven;
+          case 'eight': return Rank.eight;
+          case 'nine': return Rank.nine;
+          case 'ten': return Rank.ten;
+          case 'jack': return Rank.jack;
+          case 'queen': return Rank.queen;
+          case 'king': return Rank.king;
+          default: return Rank.ace;
+        }
+      }
+      
+      // Helper function to get hand for a position from server game state
+      List<Card> getHandForPosition(PlayerPosition position) {
+        if (serverGameState.containsKey('playerHands')) {
+          final playerHands = serverGameState['playerHands'] as Map<String, dynamic>;
+          final positionKey = position.toString().split('.').last; // Convert PlayerPosition.south to 'south'
+          if (playerHands.containsKey(positionKey)) {
+            final handData = playerHands[positionKey] as List<dynamic>;
+            return handData.map((cardData) {
+              final cardMap = cardData as Map<String, dynamic>;
+              return Card(
+                suit: parseSuit(cardMap['suit']),
+                rank: parseRank(cardMap['rank']),
+              );
+            }).toList();
+          }
+        }
+        return [];
+      }
+      
+      // Add human player with correct position and hand
       if (humanPlayer != null) {
-        _logger.logContractSelection(contract, _game!.availableContracts, humanPlayer);
-      }
-      
-      if (_game!.selectContract(contract)) {
-        notifyListeners();
-        _handleBotActions();
-      }
-    } catch (e) {
-      _errorMessage = 'Error selecting contract: ${e.toString()}';
-      notifyListeners();
-    }
-  }
-
-  void playCard(Card card) {
-    if (_game == null || _game!.phase != GamePhase.playing) return;
-    
-    // Log thinking time if we were tracking it
-    if (_actionStartTime != null) {
-      final thinkingTime = DateTime.now().difference(_actionStartTime!);
-      final humanPlayer = currentUser;
-      _logger.logThinkingTime('card_play', thinkingTime, {
-        'played_card': card.toString(),
-        'hand_size': humanPlayer?.hand.length ?? 0,
-        'contract': _game!.currentContract?.name,
-      });
-    }
-    
-    try {
-      // Log the card play before executing
-      final humanPlayer = currentUser;
-      if (humanPlayer != null) {
-        _logger.logCardPlay(card, humanPlayer, _game!);
-      }
-      
-      if (_game!.playCard(PlayerPosition.south, card)) {
-        notifyListeners();
-        _handleBotActions();
-      }
-    } catch (e) {
-      _errorMessage = 'Error playing card: ${e.toString()}';
-      notifyListeners();
-    }
-  }
-
-  void doubleKingOfHearts() {
-    if (_game == null || _game!.currentContract != TrexContract.kingOfHearts) return;
-    
-    try {
-      // Log the doubling decision
-      final humanPlayer = currentUser;
-      if (humanPlayer != null) {
-        _logger.logKingOfHeartsDoubling(true, humanPlayer, _game!);
-      }
-      
-      if (_game!.doubleKingOfHearts()) {
-        notifyListeners();
-      }
-    } catch (e) {
-      _errorMessage = 'Error doubling king: ${e.toString()}';
-      notifyListeners();
-    }
-  }
-
-  void passTrexTurn() {
-    if (_game == null || _game!.currentContract != TrexContract.trex) return;
-    if (_game!.currentPlayer != PlayerPosition.south) return;
-    
-    try {
-      // Log the Trex pass decision
-      final humanPlayer = currentUser;
-      if (humanPlayer != null) {
-        _logger.logTrexPass(humanPlayer, _game!);
-      }
-      
-      _game!.passTrexTurn();
-      notifyListeners();
-      _handleBotActions();
-    } catch (e) {
-      _errorMessage = 'Error passing turn: ${e.toString()}';
-      notifyListeners();
-    }
-  }
-
-  bool get canHumanPlayerPass {
-    if (_game == null || _game!.currentContract != TrexContract.trex) return false;
-    if (_game!.currentPlayer != PlayerPosition.south) return false;
-    final currentUser = this.currentUser;
-    if (currentUser == null) return false;
-    return !_game!.hasValidTrexMove(currentUser);
-  }
-
-  bool get shouldHighlightCards {
-    if (_game == null) return false;
-    if (_game!.phase != GamePhase.playing) return false;
-    if (_game!.currentPlayer != PlayerPosition.south) return false;
-    // Only highlight cards during Trix contract to help players understand valid moves
-    return _game!.currentContract == TrexContract.trex;
-  }
-
-  List<Card> getValidCardsForHuman() {
-    if (_game == null || _game!.phase != GamePhase.playing) return [];
-    if (_game!.currentPlayer != PlayerPosition.south) return [];
-    
-    final currentUser = this.currentUser;
-    if (currentUser == null) return [];
-    
-    if (_game!.currentContract == TrexContract.trex) {
-      return currentUser.hand.where((card) => _game!.canPlayTrexCard(card)).toList();
-    } else {
-      return currentUser.hand.where((card) => _game!.isValidTrickPlay(currentUser, card)).toList();
-    }
-  }
-
-  Future<void> _handleBotActions() async {
-    if (_game == null) return;
-
-    // First, check if the current player has any valid moves. If not, skip their turn.
-    await _checkAndSkipTurnIfNeeded();
-
-    if (_game == null) return; // Game might be null after state changes
-
-    if (_game!.phase == GamePhase.trickComplete) {
-      Future.delayed(const Duration(seconds: 1), () {
-        if (_game != null) {
-          if (kDebugMode) print('⏰ Completing trick after delay');
-          _game!.completeTrick();
-          notifyListeners();
-          _handleBotActions();
-        }
-      });
-      return;
-    }
-
-    if (_game!.phase == GamePhase.roundEnd || 
-        _game!.phase == GamePhase.kingdomEnd || 
-        _game!.phase == GamePhase.gameEnd) {
-      if (kDebugMode) print('🏁 Game phase is ${_game!.phase.englishName} - stopping bot actions');
-      return;
-    }
-
-    if (_game!.currentPlayer == PlayerPosition.south) {
-      if (kDebugMode) print('🎮 Human player turn (South) - waiting for user input');
-      // Even for human, check if they are stuck, and if so, auto-pass.
-      if (_game!.currentContract == TrexContract.trex && canHumanPlayerPass) {
-        if (kDebugMode) print('🤖 Human has no valid Trex moves, auto-passing.');
-        Future.delayed(const Duration(milliseconds: 500), () {
-          passTrexTurn();
-        });
-      }
-      return;
-    }
-
-    Future.delayed(const Duration(milliseconds: 800), () async {
-      if (_game == null || _game!.currentPlayer == PlayerPosition.south) return;
-      
-      try {
-        if (kDebugMode) print('🤖 Bot check: Phase=${_game!.phase.englishName}, Player=${_game!.currentPlayer.englishName}');
-        
-        if (_game!.phase == GamePhase.contractSelection) {
-          final botContract = await _calculateBotContract(_game!.currentPlayer);
-          if (botContract != null) {
-            if (kDebugMode) print('Bot ${_game!.currentPlayer.englishName} selecting: ${botContract.englishName}');
-            _game!.selectContract(botContract);
-            notifyListeners();
-            _handleBotActions();
-          } else {
-            if (kDebugMode) print('Bot ${_game!.currentPlayer.englishName} passed contract selection');
-            notifyListeners();
-            _handleBotActions();
-          }
-        } else if (_game!.phase == GamePhase.playing) {
-          final currentPlayerBefore = _game!.currentPlayer;
-          final botCard = await _selectBotCard(_game!.currentPlayer);
-          
-          if (botCard != null) {
-            if (kDebugMode) print('Bot ${_game!.currentPlayer.englishName} attempting to play: ${botCard.rank.englishName} ${botCard.suit.englishName}');
-            
-            // Debug: Check if the card is actually valid
-            bool isCardValid = false;
-            if (_game!.currentContract == TrexContract.trex) {
-              isCardValid = _game!.canPlayTrexCard(botCard);
-            } else {
-              final player = _game!.getPlayerByPosition(_game!.currentPlayer);
-              isCardValid = _game!.isValidTrickPlay(player, botCard);
-            }
-            
-            if (kDebugMode) print('🔍 Card validity check: $isCardValid');
-            
-            bool gameStateChanged = _game!.playCard(_game!.currentPlayer, botCard);
-            
-            if (kDebugMode) print('🎮 Game state changed after play: $gameStateChanged');
-            
-            if (gameStateChanged) {
-              notifyListeners();
-              _handleBotActions();
-            } else {
-              if (kDebugMode) print('❌ Bot ${_game!.currentPlayer.englishName} card was rejected by game');
-              // Force advance to next player to prevent infinite loop
-              _game!.currentPlayer = _game!.currentPlayer.next;
-              if (kDebugMode) print('🔄 Forced advancement to ${_game!.currentPlayer.englishName}');
-              notifyListeners();
-              _handleBotActions();
-            }
-          } else {
-            // Bot passed turn - check if game state actually changed
-            if (_game!.currentPlayer != currentPlayerBefore) {
-              if (kDebugMode) print('Bot ${currentPlayerBefore.englishName} passed turn, now ${_game!.currentPlayer.englishName}\'s turn');
-              notifyListeners();
-              _handleBotActions();
-            } else {
-              // Game state didn't change - this might indicate a problem
-              if (kDebugMode) print('⚠️ Bot ${_game!.currentPlayer.englishName} passed but game state unchanged - stopping to prevent infinite loop');
-              
-              // For Trex, check if all players are stuck
-              if (_game!.currentContract == TrexContract.trex) {
-                final allPlayersFinishedOrStuck = _game!.players.every((player) => 
-                    player.hand.isEmpty || !_game!.hasValidTrexMove(player));
-                
-                if (allPlayersFinishedOrStuck) {
-                  if (kDebugMode) print('🏁 All players finished or stuck in Trex - ending round');
-                  
-                  // Award points to players who are stuck with cards
-                  _awardPointsToStuckPlayers();
-                  
-                  _game!.phase = GamePhase.roundEnd;
-                  notifyListeners();
-                  return;
-                }
-              }
-              
-              // For other contracts, similar check
-              if (_game!.currentContract != TrexContract.trex) {
-                final allPlayersHaveNoCards = _game!.players.every((player) => player.hand.isEmpty);
-                if (allPlayersHaveNoCards) {
-                  if (kDebugMode) print('🏁 All players finished - ending round');
-                  _game!.phase = GamePhase.roundEnd;
-                  notifyListeners();
-                  return;
-                }
-              }
-              
-              // Force advance to break the loop
-              if (kDebugMode) print('🔄 Force advancing to break infinite loop');
-              _game!.currentPlayer = _game!.currentPlayer.next;
-              notifyListeners();
-              _handleBotActions();
-            }
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) print('❌ Error in bot actions: $e');
-        _errorMessage = 'Bot action error: ${e.toString()}';
-        notifyListeners();
-      }
-    });
-  }
-
-  /// Checks if the current player has any valid moves. If not, it skips their turn.
-  Future<void> _checkAndSkipTurnIfNeeded() async {
-    if (_game == null || _game!.phase != GamePhase.playing) return;
-
-    final currentPlayerObject = _game!.getPlayerByPosition(_game!.currentPlayer);
-    if (currentPlayerObject.hand.isEmpty) {
-      return; // Player has no cards, nothing to do.
-    }
-    
-    // Special handling for human player (south) - always give them a chance to play if they have cards
-    if (_game!.currentPlayer == PlayerPosition.south) {
-      if (kDebugMode) {
-        print('👤 Human player\'s turn - checking for valid moves');
-      }
-    }
-
-    bool hasValidMoves;
-    if (_game!.currentContract == TrexContract.trex) {
-      hasValidMoves = _game!.hasValidTrexMove(currentPlayerObject);
-      
-      if (kDebugMode) {
-        print('🧐 Checking valid Trex moves for ${currentPlayerObject.position.englishName}:');
-        print('   Hand: ${currentPlayerObject.hand.map((c) => "${c.rank.englishName} of ${c.suit.englishName}").join(', ')}');
-        print('   Has valid moves: $hasValidMoves');
-        
-        // Debug: Check each card individually
-        for (var card in currentPlayerObject.hand) {
-          bool canPlay = _game!.canPlayTrexCard(card);
-          print('   ${card.rank.englishName} of ${card.suit.englishName} can be played: $canPlay');
-        }
-        
-        // Debug: Check Jack cards specifically
-        final jacks = currentPlayerObject.hand.where((c) => c.rank == Rank.jack).toList();
-        if (jacks.isNotEmpty) {
-          print('   Found ${jacks.length} Jack(s) in hand: ${jacks.map((c) => "${c.suit.englishName}").join(', ')}');
-        }
-      }
-    } else {
-      // For trick-based contracts, a player can always play a card if they have one.
-      hasValidMoves = currentPlayerObject.hand.isNotEmpty;
-    }
-
-    if (!hasValidMoves) {
-      if (kDebugMode) {
-        print('🤖 Player ${currentPlayerObject.position.englishName} has no valid moves. Skipping turn.');
-      }
-
-      // This logic is primarily for the Trex contract, where a player can be forced to pass.
-      if (_game!.currentContract == TrexContract.trex) {
-        // Double-check for human player to make sure they don't have any Jacks
-        if (currentPlayerObject.position == PlayerPosition.south) {
-          final hasJack = currentPlayerObject.hand.any((card) => card.rank == Rank.jack);
-          if (hasJack) {
-            if (kDebugMode) {
-              print('⚠️ Human player has a Jack but system thinks they have no valid moves!');
-              print('   Not skipping their turn to allow them to play the Jack.');
-            }
-            return; // Don't skip human player's turn if they have a Jack
-          }
-          
-          // For human player, confirm they have no valid moves before skipping
-          if (kDebugMode) {
-            print('🔍 Double-checking human player has no valid Trex moves:');
-            for (var card in currentPlayerObject.hand) {
-              print('   Checking ${card.rank.englishName} of ${card.suit.englishName}: ${_game!.canPlayTrexCard(card)}');
-            }
-          }
-        }
-        
-        _game!.passTrexTurn();
-        notifyListeners();
-
-        // Give a moment for the UI to update before checking the next player.
-        await Future.delayed(const Duration(milliseconds: 100));
-
-        // Recursively call to handle the next player, who might also need to be skipped.
-        await _handleBotActions();
-      }
-    }
-  }
-
-  Future<TrexContract?> _calculateBotContract(PlayerPosition position) async {
-    final availableContracts = _game!.availableContracts;
-    if (availableContracts.isEmpty) return null;
-
-    if (_aiService != null) {
-      try {
-        final aiContract = await _aiService!.selectContractWithFastFallback(
-          botPosition: position,
-          game: _game!,
-          availableContracts: availableContracts,
+        final position = humanPlayer.position; // Use the position already set on the Player object
+        final humanPlayerData = Player(
+          id: humanPlayer.id,
+          name: humanPlayer.name,
+          position: position,
+          hand: getHandForPosition(position),
+          isBot: false,
         );
-        if (aiContract != null && availableContracts.contains(aiContract)) {
-          return aiContract;
-        }
-      } catch (e) {
-        if (kDebugMode) print('❌ AI contract selection error: $e');
-      }
-    }
-    
-    final preferences = _calculateContractPreferences(_game!.getPlayerByPosition(position));
-    return preferences.first;
-  }
-
-  Future<Card?> _selectBotCard(PlayerPosition position) async {
-    final player = _game!.getPlayerByPosition(position);
-    if (player.hand.isEmpty) return null;
-
-    if (_aiService != null) {
-      try {
-        List<Card> validCards;
-        if (_game!.currentContract == TrexContract.trex) {
-          validCards = player.hand.where((card) => _game!.canPlayTrexCard(card)).toList();
-        } else {
-          validCards = player.hand.where((card) => _game!.isValidTrickPlay(player, card)).toList();
-        }
-
-        if (validCards.isNotEmpty) {
-          final aiCard = await _aiService!.selectCardWithFastFallback(
-            botPosition: position,
-            game: _game!,
-            hand: player.hand,
-            validCards: validCards,
-          );
-          if (aiCard != null && validCards.contains(aiCard)) {
-            return aiCard;
-          }
-        }
-      } catch (e) {
-        if (kDebugMode) print('❌ AI card selection error: $e');
-      }
-    }
-
-    if (_game!.currentContract == TrexContract.trex) {
-      final selectedCard = _selectTrexCard(player);
-      if (selectedCard == null) {
-        // Player has no valid moves, pass the turn
-        if (kDebugMode) print('Bot ${player.position.englishName} passing Trex turn');
-        _game!.passTrexTurn();
-      }
-      return selectedCard;
-    } else {
-      // For trick-based contracts
-      final selectedCard = _selectTrickCard(player);
-      if (selectedCard == null) {
-        // This should rarely happen in trick-based games
-        // If no card is valid, just play the first card (emergency fallback)
-        if (player.hand.isNotEmpty) {
-          if (kDebugMode) print('Bot ${player.position.englishName} emergency fallback - playing first card');
-          return player.hand.first;
-        } else {
-          if (kDebugMode) print('Bot ${player.position.englishName} has no cards left');
-          return null;
-        }
-      }
-      return selectedCard;
-    }
-  }
-
-  Card? _selectTrexCard(Player player) {
-    final validMoves = player.hand.where((card) => _game!.canPlayTrexCard(card)).toList();
-    if (validMoves.isEmpty) {
-      // Player has no valid Trex moves, will pass the turn in the calling method
-      if (kDebugMode) print('Player ${player.position.englishName} has no valid Trex moves');
-      return null;
-    }
-    validMoves.sort((a, b) => b.rank.value.compareTo(a.rank.value));
-    return validMoves.first;
-  }
-
-  Card? _selectTrickCard(Player player) {
-    final allCards = player.hand;
-    final validCards = allCards.where((card) => _game!.isValidTrickPlay(player, card)).toList();
-    
-    if (kDebugMode) {
-      print('🎯 Selecting trick card for ${player.position.englishName}:');
-      print('   Hand size: ${allCards.length}');
-      print('   Valid cards: ${validCards.length}');
-      print('   All cards: ${allCards.map((c) => '${c.rank.englishName} ${c.suit.englishName}').join(', ')}');
-      if (validCards.isNotEmpty) {
-        print('   Valid cards: ${validCards.map((c) => '${c.rank.englishName} ${c.suit.englishName}').join(', ')}');
-      }
-      if (_game!.currentTrick != null && _game!.currentTrick!.cards.isNotEmpty) {
-        final leadCard = _game!.currentTrick!.cards.values.first;
-        print('   Lead card: ${leadCard.rank.englishName} ${leadCard.suit.englishName}');
-        print('   Has lead suit: ${allCards.any((c) => c.suit == leadCard.suit)}');
-      }
-    }
-    
-    if (validCards.isEmpty) {
-      // Player has no valid cards for trick play - this should be very rare
-      if (kDebugMode) {
-        print('⚠️ Player ${player.position.englishName} has no valid cards for trick play');
-        print('   This suggests a game logic issue - in trick play, a player should always be able to play some card');
-      }
-      return null;
-    }
-
-    Card selectedCard;
-    switch (_game!.currentContract) {
-      case TrexContract.kingOfHearts:
-        selectedCard = _selectForKingOfHearts(validCards, player);
-        break;
-      case TrexContract.queens:
-        selectedCard = _selectForQueens(validCards, player);
-        break;
-      case TrexContract.diamonds:
-        selectedCard = _selectForDiamonds(validCards, player);
-        break;
-      case TrexContract.collections:
-        selectedCard = _selectForCollections(validCards, player);
-        break;
-      default:
-        selectedCard = validCards.first;
-        break;
-    }
-    
-    // Double-check that the selected card is actually valid
-    if (!_game!.isValidTrickPlay(player, selectedCard)) {
-      if (kDebugMode) print('❌ Selected card ${selectedCard.rank.englishName} ${selectedCard.suit.englishName} is not valid! Using first valid card instead.');
-      selectedCard = validCards.first;
-    }
-    
-    if (kDebugMode) print('✅ Selected card: ${selectedCard.rank.englishName} ${selectedCard.suit.englishName}');
-    return selectedCard;
-  }
-
-  Card _selectForKingOfHearts(List<Card> validCards, Player player) {
-    if (kDebugMode) {
-      print('🛡️ === KING OF HEARTS PROTECTION SYSTEM ===');
-      print('🃏 Valid cards: ${validCards.map((c) => "${c.rank.englishName} ${c.suit.englishName}").join(', ')}');
-      print('👑 Has King of Hearts: ${validCards.any((card) => card.isKingOfHearts)}');
-      print('🔢 Number of options: ${validCards.length}');
-    }
-    
-    // Check if player has King of Hearts in their hand (not just in valid cards)
-    final playerHand = player.hand;
-    final hasKingOfHeartsInHand = playerHand.any((card) => card.isKingOfHearts);
-    final kingOfHearts = validCards.firstWhere((c) => c.isKingOfHearts, orElse: () => Card(suit: Suit.clubs, rank: Rank.two));
-    
-    // STRATEGIC OPPORTUNITY: Check if we can safely discard King of Hearts
-    if (hasKingOfHeartsInHand && kingOfHearts.isKingOfHearts) {
-      // Check if we're following suit or can discard any card
-      bool isFollowingSuit = false;
-      if (_game!.currentTrick != null && _game!.currentTrick!.cards.isNotEmpty) {
-        final leadCard = _game!.currentTrick!.cards.values.first;
-        isFollowingSuit = playerHand.any((c) => c.suit == leadCard.suit);
-        
-        if (!isFollowingSuit) {
-          // 🎯 GOLDEN OPPORTUNITY: We can discard any card - GET RID OF KING OF HEARTS!
-          if (kDebugMode) {
-            print('🎯 STRATEGIC DISCARD OPPORTUNITY DETECTED!');
-            print('💡 Not following suit - can discard any card');
-            print('👑 King of Hearts available to discard safely');
-            print('🗑️ DISCARDING King of Hearts to avoid future -75 penalty');
-          }
-          return kingOfHearts;
-        }
-      }
-    }
-    
-    // CRITICAL BUG FIX: NEVER choose King of Hearts if other options exist when following suit
-    if (kingOfHearts.isKingOfHearts && validCards.length > 1) {
-      if (kDebugMode) {
-        print('🚨 CRITICAL BUG PREVENTION: King of Hearts found with other options!');
-        print('🛡️ EMERGENCY OVERRIDE: Removing King of Hearts from consideration');
-        print('💰 Avoiding -75 point penalty');
+        gamePlayersList.add(humanPlayerData);
+        _currentUser = humanPlayerData;
       }
       
-      // Remove King of Hearts from options
-      List<Card> safeCards = validCards.where((card) => !card.isKingOfHearts).toList();
+      // Add AI players with correct positions and hands
+      for (var aiPlayer in aiPlayers) {
+        final position = aiPlayer.position; // Use the position already set on the Player object
+        final aiPlayerData = Player(
+          id: aiPlayer.id,
+          name: aiPlayer.name,
+          position: position,
+          hand: getHandForPosition(position),
+          isBot: true,
+        );
+        gamePlayersList.add(aiPlayerData);
+      }
       
-      if (safeCards.isNotEmpty) {
-        // Choose the lowest rank safe card to minimize risk
-        safeCards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-        Card safeChoice = safeCards.first;
-        
-        if (kDebugMode) {
-          print('✅ Emergency override successful!');
-          print('🔄 Avoided: King of Hearts (-75 points)');
-          print('🛡️ Chose instead: ${safeChoice.rank.englishName} ${safeChoice.suit.englishName}');
-        }
-        
-        return safeChoice;
-      }
-    }
-    
-    // If forced to play King of Hearts (only option), accept it
-    if (validCards.length == 1 && kingOfHearts.isKingOfHearts) {
+      _allPlayers = gamePlayersList;
+      
+      // Debug: Print all players with their positions
       if (kDebugMode) {
-        print('👑 Forced to play King of Hearts (only card available)');
-        print('✅ This is acceptable - no other choice');
+        print('🎮 Created players:');
+        for (var player in gamePlayersList) {
+          print('   - ${player.name}: ${player.position} (${player.hand.length} cards)');
+        }
       }
-      return kingOfHearts;
-    }
-    
-    // Default: choose lowest rank card
-    validCards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    Card defaultChoice = validCards.first;
-    
-    if (kDebugMode) {
-      print('✅ Default choice: ${defaultChoice.rank.englishName} ${defaultChoice.suit.englishName}');
-    }
-    
-    return defaultChoice;
-  }
-
-  Card _selectForQueens(List<Card> validCards, Player player) {
-    validCards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    return validCards.first;
-  }
-
-  Card _selectForDiamonds(List<Card> validCards, Player player) {
-    validCards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    return validCards.first;
-  }
-
-  Card _selectForCollections(List<Card> validCards, Player player) {
-    validCards.sort((a, b) => a.rank.value.compareTo(b.rank.value));
-    return validCards.first;
-  }
-
-  List<TrexContract> _calculateContractPreferences(Player player) {
-    final handAnalysis = _analyzeHand(player.hand);
-    final preferences = <TrexContract, int>{};
-
-    for (var contract in _game!.availableContracts) {
-      var score = 0;
-      switch (contract) {
-        case TrexContract.kingOfHearts:
-          score += (handAnalysis['hasKingOfHearts'] as bool) ? -100 : 50;
-          score += ((handAnalysis['highSpades'] as num) * 10).toInt();
-          break;
-        case TrexContract.queens:
-          score -= ((handAnalysis['queensCount'] as num) * 25).toInt();
-          break;
-        case TrexContract.diamonds:
-          score -= ((handAnalysis['diamondCount'] as num) * 10).toInt();
-          break;
-        case TrexContract.collections:
-          score -= ((13 - (handAnalysis['highCards'] as num)) * 10).toInt();
-          break;
-        case TrexContract.trex:
-          score += ((handAnalysis['lowCards'] as num) * 10).toInt();
-          score -= ((handAnalysis['highCards'] as num) * 5).toInt();
-          break;
+      
+      // Create TrexGame with the players
+      _currentGame = TrexGame(
+        players: _allPlayers,
+        firstKing: PlayerPosition.south, // Default, will be updated from server state
+      );
+      
+      // Debug: Verify game players have correct positions
+      if (kDebugMode) {
+        print('🎮 Game players after TrexGame creation:');
+        for (var player in _currentGame!.players) {
+          print('   - ${player.name}: ${player.position} (${player.hand.length} cards)');
+        }
       }
-      preferences[contract] = score;
+      
+      // Update game state from server
+      if (serverGameState.containsKey('phase')) {
+        final phaseString = serverGameState['phase'];
+        if (phaseString == 'contractSelection') {
+          _currentGame!.phase = GamePhase.contractSelection;
+        } else if (phaseString == 'playing') {
+          _currentGame!.phase = GamePhase.playing;
+        }
+      }
+      
+      // Update current king from server state
+      if (serverGameState.containsKey('currentKing')) {
+        final currentKingStr = serverGameState['currentKing'].toString().toLowerCase();
+        switch (currentKingStr) {
+          case 'north': _currentGame!.currentKing = PlayerPosition.north; break;
+          case 'south': _currentGame!.currentKing = PlayerPosition.south; break;
+          case 'east': _currentGame!.currentKing = PlayerPosition.east; break;
+          case 'west': _currentGame!.currentKing = PlayerPosition.west; break;
+        }
+      }
+      
+      // Update current player from server state
+      if (serverGameState.containsKey('currentPlayer')) {
+        final currentPlayerStr = serverGameState['currentPlayer'].toString().toLowerCase();
+        switch (currentPlayerStr) {
+          case 'north': _currentGame!.currentPlayer = PlayerPosition.north; break;
+          case 'south': _currentGame!.currentPlayer = PlayerPosition.south; break;
+          case 'east': _currentGame!.currentPlayer = PlayerPosition.east; break;
+          case 'west': _currentGame!.currentPlayer = PlayerPosition.west; break;
+        }
+      }
+      
+      if (serverGameState.containsKey('round')) {
+        _currentGame!.round = serverGameState['round'] ?? 1;
+      }
+      
+      if (serverGameState.containsKey('kingdom')) {
+        _currentGame!.kingdom = serverGameState['kingdom'] ?? 1;
+      }
+      
+      _isLoading = false;
+      
+      if (kDebugMode) {
+        print('✅ Multiplayer game initialized successfully!');
+        print('🎮 Game has active game: $hasActiveGame');
+        print('🎮 Game phase: ${_currentGame!.phase.arabicName}');
+        print('🎮 Current king: ${_currentGame!.currentKing}');
+        print('🎮 Current player: ${_currentGame!.currentPlayer}');
+        print('🎮 Human player position: ${_currentUser?.position}');
+        print('🎮 Is human player turn: $isHumanPlayerTurn');
+      }
+      
+      // Force a UI update and debug check
+      debugCheckTurn();
+      
+      // Schedule AI move if it's AI player's turn
+      _scheduleAIMovesIfNeeded();
+    } catch (e) {
+      _isLoading = false;
+      _errorMessage = 'Failed to initialize multiplayer game: $e';
+      if (kDebugMode) print('❌ Multiplayer game initialization failed: $e');
+      notifyListeners();
     }
-
-    final sortedPreferences = preferences.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    return sortedPreferences.map((e) => e.key).toList();
   }
 
-  Map<String, dynamic> _analyzeHand(List<Card> hand) {
-    return {
-      'hasKingOfHearts': hand.any((c) => c.isKingOfHearts),
-      'queensCount': hand.where((c) => c.rank == Rank.queen).length,
-      'diamondCount': hand.where((c) => c.suit == Suit.diamonds).length,
-      'highCards': hand.where((c) => c.rank.value >= Rank.jack.value).length,
-      'lowCards': hand.where((c) => c.rank.value <= Rank.six.value).length,
-      'highSpades': hand.where((c) => c.suit == Suit.spades && c.rank.value >= Rank.jack.value).length,
-    };
+  /// Select contract
+  void selectContract(dynamic contract) {
+    if (kDebugMode) print('🎮 Contract selection: $contract (single player mode)');
+    // This is used for single player mode fallback
   }
 
+  /// Play card
+  void playCard(dynamic card) {
+    if (kDebugMode) print('🎮 Play card not implemented yet');
+  }
+
+  /// Reset game
   void resetGame() {
-    // Log game end if there was an active game
-    if (_game != null) {
-      _logGameEnd();
-    }
-    
-    _game = null;
+    _currentGame = null;
+    _currentUser = null;
+    _allPlayers.clear();
+    _isMultiplayer = false;
     _isLoading = false;
     _errorMessage = null;
-    _actionStartTime = null;
+    if (kDebugMode) print('🎮 Game state reset');
     notifyListeners();
   }
 
+  /// Clear error
   void clearError() {
     _errorMessage = null;
     notifyListeners();
   }
+  
+  /// Update game state from multiplayer service and trigger AI moves if needed
+  void updateGameState(Map<String, dynamic> serverGameState) {
+    if (!_isMultiplayer || !hasActiveGame) return;
+    
+    try {
+      // Update game phase
+      if (serverGameState.containsKey('phase')) {
+        final phaseStr = serverGameState['phase'].toString().toLowerCase();
+        switch (phaseStr) {
+          case 'contractselection': _currentGame!.phase = GamePhase.contractSelection; break;
+          case 'playing': _currentGame!.phase = GamePhase.playing; break;
+          // Add other phases as needed
+        }
+      }
+      
+      // Update current contract
+      if (serverGameState.containsKey('currentContract')) {
+        final contractVal = serverGameState['currentContract'];
+        if (contractVal != null && contractVal.toString().isNotEmpty && contractVal.toString() != 'null') {
+          final contractStr = contractVal.toString().toLowerCase();
+          switch (contractStr) {
+            case 'kingofhearts':
+            case 'king_of_hearts':
+            case 'kingofheart':
+            case 'king of hearts':
+              _currentGame!.currentContract = TrexContract.kingOfHearts;
+              break;
+            case 'queens':
+            case 'girls':
+              _currentGame!.currentContract = TrexContract.queens;
+              break;
+            case 'diamonds':
+            case 'dinari':
+              _currentGame!.currentContract = TrexContract.diamonds;
+              break;
+            case 'collections':
+            case 'hearts':
+              _currentGame!.currentContract = TrexContract.collections;
+              break;
+            case 'trex':
+            case 'trixnotricks':
+              _currentGame!.currentContract = TrexContract.trex;
+              break;
+            default:
+              // Try matching enum names directly
+              try {
+                _currentGame!.currentContract = TrexContract.values.firstWhere((e) => e.name.toLowerCase() == contractStr);
+              } catch (_) {
+                if (kDebugMode) print('⚠️ Unknown contract string from server: $contractVal');
+              }
+          }
+        } else {
+          _currentGame!.currentContract = null;
+        }
+      }
+      
+      // Update current king
+      if (serverGameState.containsKey('currentKing')) {
+        final currentKingStr = serverGameState['currentKing'].toString().toLowerCase();
+        switch (currentKingStr) {
+          case 'north': _currentGame!.currentKing = PlayerPosition.north; break;
+          case 'south': _currentGame!.currentKing = PlayerPosition.south; break;
+          case 'east': _currentGame!.currentKing = PlayerPosition.east; break;
+          case 'west': _currentGame!.currentKing = PlayerPosition.west; break;
+        }
+      }
+      
+      // Update current player
+      if (serverGameState.containsKey('currentPlayer')) {
+        final currentPlayerStr = serverGameState['currentPlayer'].toString().toLowerCase();
+        switch (currentPlayerStr) {
+          case 'north': _currentGame!.currentPlayer = PlayerPosition.north; break;
+          case 'south': _currentGame!.currentPlayer = PlayerPosition.south; break;
+          case 'east': _currentGame!.currentPlayer = PlayerPosition.east; break;
+          case 'west': _currentGame!.currentPlayer = PlayerPosition.west; break;
+        }
+      }
+      
+      if (kDebugMode) {
+        print('🔄 Game state updated from server');
+        print('   - Phase: ${_currentGame!.phase}');
+        print('   - Current king: ${_currentGame!.currentKing}');
+        print('   - Current player: ${_currentGame!.currentPlayer}');
+        print('   - Is current player AI: $isCurrentPlayerAI');
+      }
+      
+      // Schedule AI moves if needed
+      _scheduleAIMovesIfNeeded();
+      
+      notifyListeners();
+    } catch (e) {
+      if (kDebugMode) print('❌ Failed to update game state: $e');
+    }
+  }
+
+  /// Schedule AI moves if current player is AI
+  void _scheduleAIMovesIfNeeded() {
+    if (!_isMultiplayer || _multiplayerService == null || !hasActiveGame) return;
+    
+    // Cancel any existing timer
+    _aiMoveTimer?.cancel();
+    
+    if (isCurrentPlayerAI) {
+      if (kDebugMode) {
+        print('🤖 Scheduling AI move for ${_currentGame!.phase == GamePhase.contractSelection ? 'contract selection' : 'card play'}');
+      }
+      
+      // Schedule AI move after a short delay (1-3 seconds)
+      _aiMoveTimer = Timer(Duration(milliseconds: 1500 + (DateTime.now().millisecond % 1500)), () {
+        _makeAIMove();
+      });
+    }
+  }
+  
+  /// Make an AI move based on current game phase
+  void _makeAIMove() async {
+    if (!_isMultiplayer || _multiplayerService == null || !hasActiveGame || !isCurrentPlayerAI) return;
+    
+    try {
+      if (_currentGame!.phase == GamePhase.contractSelection) {
+        await _makeAIContractSelection();
+      } else if (_currentGame!.phase == GamePhase.playing) {
+        await _makeAICardPlay();
+      }
+    } catch (e) {
+      if (kDebugMode) print('❌ AI move failed: $e');
+    }
+  }
+  
+  /// Make AI contract selection
+  Future<void> _makeAIContractSelection() async {
+    if (_multiplayerService == null) return;
+    
+  // Simple AI contract selection - pick a random valid contract by enum name
+  final contracts = ['kingOfHearts', 'queens', 'diamonds', 'collections', 'trex'];
+    final selectedContract = contracts[DateTime.now().millisecond % contracts.length];
+    
+    if (kDebugMode) {
+      print('🤖 AI selecting contract: $selectedContract');
+    }
+    
+    // Call multiplayer service to send contract selection
+    try {
+      await _multiplayerService.selectContract(selectedContract);
+    } catch (e) {
+      if (kDebugMode) print('❌ AI contract selection failed: $e');
+    }
+  }
+  
+  /// Make AI card play (placeholder for future implementation)
+  Future<void> _makeAICardPlay() async {
+    if (kDebugMode) print('🤖 AI card play not implemented yet');
+    // TODO: Implement AI card selection logic
+  }
 
   @override
   void dispose() {
-    _aiService?.dispose();
-    _logger.dispose();
+    _aiMoveTimer?.cancel();
     super.dispose();
-  }
-
-  Future<void> reinitializeAIService() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final apiKey = prefs.getString('gemini_api_key');
-      final useLightweightAI = prefs.getBool('use_lightweight_ai') ?? false;
-      
-      if (useLightweightAI) {
-        // Use lightweight AI for testing
-        _aiService = LightweightAIAdapter();
-        if (kDebugMode) print('✅ Lightweight AI Service initialized for testing.');
-      } else if (apiKey != null && apiKey.isNotEmpty) {
-        _aiService = AIService(apiKey: apiKey);
-        if (kDebugMode) print('✅ Full AI Service reinitialized successfully.');
-      } else {
-        _aiService = null;
-        if (kDebugMode) print('⚠️ AI Service not initialized (no API key).');
-      }
-    } catch (e) {
-      _aiService = null;
-      if (kDebugMode) print('❌ Error reinitializing AI Service: $e');
-    }
-    notifyListeners();
-  }
-
-  bool get isAIServiceAvailable => _aiService != null;
-
-  String get aiServiceStatus {
-    if (_aiService == null) return 'Not Configured';
-    return 'Active (${_aiService!.providerName})';
-  }
-  
-  // Toggle between full AI and lightweight AI
-  Future<void> setLightweightAIMode(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('use_lightweight_ai', enabled);
-    await reinitializeAIService();
-    if (kDebugMode) {
-      print('🤖 AI Mode: ${enabled ? 'Lightweight (Testing)' : 'Full AI'}');
-    }
-  }
-
-  bool get isLightweightAIMode {
-    // This is a sync getter, so we'll check the AI service type
-    return _aiService?.providerName.contains('Lightweight') ?? false;
-  }
-  
-  Future<Map<String, dynamic>> testAIConnection() async {
-    if (_aiService == null) {
-      return {
-        'success': false,
-        'error': 'No AI service configured',
-      };
-    }
-    return await _aiService!.testConnectionWithDebug();
-  }
-
-  Future<String> debugGameState() async {
-    if (_game == null) return 'No active game.';
-
-    final buffer = StringBuffer();
-    buffer.writeln('--- GAME STATE DEBUG ---');
-    buffer.writeln('Phase: ${_game!.phase.englishName}');
-    buffer.writeln('Current Player: ${_game!.currentPlayer.englishName}');
-    buffer.writeln('Current King: ${_game!.currentKing.englishName}');
-    buffer.writeln('Contract: ${_game!.currentContract?.englishName ?? 'None'}');
-    buffer.writeln('Players:');
-    for (final player in _game!.players) {
-      buffer.writeln('  - ${player.name} (${player.position.englishName}): ${player.hand.length} cards, Score: ${player.score}');
-    }
-    buffer.writeln('------------------------');
-    return buffer.toString();
-  }
-
-  // Logging-related methods
-  void startThinkingTimer() {
-    _actionStartTime = DateTime.now();
-  }
-
-  void resetThinkingTimer() {
-    _actionStartTime = null;
-  }
-
-  // Called when game ends to log final results
-  void _logGameEnd() {
-    if (_game != null) {
-      _logger.logGameEnd(_game!);
-    }
-  }
-
-  // Award points to players who are stuck with cards in Trex
-  void _awardPointsToStuckPlayers() {
-    if (_game == null || _game!.currentContract != TrexContract.trex) return;
-    
-    // Count how many players have already finished (empty hand)
-    int finishedCount = _game!.players.where((p) => p.hand.isEmpty).length;
-    
-    // If 3 players have already finished, just award 50 points to the last player
-    if (finishedCount == 3) {
-      final lastPlayer = _game!.players.firstWhere((p) => p.hand.isNotEmpty);
-      lastPlayer.score += 50;
-      if (kDebugMode) print('👍 ${lastPlayer.position.englishName} awarded 50 points as the last player with cards');
-      return;
-    }
-    
-    // Award points to players who are stuck (have cards but no valid moves)
-    for (Player player in _game!.players) {
-      // Skip players who have already finished - they've already received their points
-      if (player.hand.isEmpty) continue;
-      
-      // This player is stuck with cards
-      if (!_game!.hasValidTrexMove(player)) {
-        // Determine their "finishing position" based on already finished players
-        finishedCount++;
-        
-        // Award points based on this finishing position
-        switch (finishedCount) {
-          case 1: // Should not happen, but handle it anyway
-            player.score += 200;
-            if (kDebugMode) print('🏆 ${player.position.englishName} awarded 200 points as stuck 1st player');
-            break;
-          case 2:
-            player.score += 150;
-            if (kDebugMode) print('🥈 ${player.position.englishName} awarded 150 points as stuck 2nd player');
-            break;
-          case 3:
-            player.score += 100;
-            if (kDebugMode) print('🥉 ${player.position.englishName} awarded 100 points as stuck 3rd player');
-            break;
-          case 4:
-            player.score += 50;
-            if (kDebugMode) print('👍 ${player.position.englishName} awarded 50 points as stuck 4th player');
-            break;
-        }
-      }
-    }
-  }
-
-  // Logging system access methods
-  bool get isLoggingEnabled => _logger.isEnabled;
-
-  Future<void> setLoggingEnabled(bool enabled) async {
-    await _logger.setEnabled(enabled);
-    notifyListeners();
-  }
-
-  Future<String> getLogsDirectory() async {
-    return await _logger.getLogsDirectory();
-  }
-
-  Future<File?> exportTrainingData() async {
-    return await _logger.exportLogsForTraining();
   }
 }

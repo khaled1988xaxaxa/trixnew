@@ -37,6 +37,11 @@ class GameLogger {
 
   /// Create a new log file for this session
   Future<void> _createLogFile() async {
+    if (kIsWeb) {
+      if (kDebugMode) print('📝 GameLogger: skipping file storage on web');
+      _logFile = null;
+      return;
+    }
     try {
       final directory = await getApplicationDocumentsDirectory();
       final logsDir = Directory('${directory.path}/trix_logs');

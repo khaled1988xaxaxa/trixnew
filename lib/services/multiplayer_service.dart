@@ -113,14 +113,24 @@ class MultiplayerService {
 
   Future<String> _getServerUrl() async {
     // Check if we're on web or mobile
-    final connectivityResult = await Connectivity().checkConnectivity();
-    
-    if (kIsWeb) {
-      // For web, use localhost
-      return 'ws://localhost:8081';
+    // Try to detect the correct host for web builds. Using 'localhost' on web
+    // makes the browser try to connect to the device itself (phone), which
+    // breaks multi-device play. Use the page's host if available so remote
+    // devices connect back to the server machine.
+  await Connectivity().checkConnectivity();
+
+  if (kIsWeb) {
+  // Use the host where the web page is served from, but always target
+  // the multiplayer server port (8080) instead of the flutter dev port.
+  // This prevents the browser from trying to connect to the dev server
+  // websocket port (e.g. 59213) which the multiplayer server doesn't listen on.
+  final host = Uri.base.host.isNotEmpty ? Uri.base.host : 'localhost';
+  final port = 8080;
+  return 'ws://$host:$port';
     } else {
-      // For mobile, use the computer's IP address and correct port
-      return 'ws://192.168.0.94:8081';
+      // For mobile/desktop, use the configured local IP (fallback). You can
+      // update this IP to your machine's LAN IP if needed.
+      return 'ws://192.168.0.80:8080';
     }
   }
 
@@ -586,13 +596,17 @@ class MultiplayerService {
     try {
       if (kDebugMode) {
         print('🎮 Game started! ${message.data['message']}');
+        print('🎯 Game started message data: ${message.data.keys}');
       }
+      
+      // Use room data from message if available, otherwise use current room
+      final roomData = message.data['room'] ?? _currentRoom?.toJson();
       
       // Emit game started event
       _gameStartedController.add({
         'gameState': message.data['gameState'],
         'message': message.data['message'],
-        'room': _currentRoom?.toJson(),
+        'room': roomData,
       });
       
       // Handle game state if provided
@@ -611,12 +625,14 @@ class MultiplayerService {
 
   void _handleGameStateUpdate(MultiplayerMessage message) {
     try {
+      // debug: log raw payload for troubleshooting
+      if (kDebugMode) print('🛰️ Received gameStateUpdate (raw): ${message.data}');
       final gameState = MultiplayerGameState.fromJson(message.data['gameState']);
       _currentGameState = gameState;
       _gameStateController.add(gameState);
-      
+
       if (kDebugMode) {
-        print('🎮 Game state updated: ${gameState.phase.englishName}');
+        print('🛰️ Parsed MultiplayerGameState: phase=${gameState.phase}, contract=${gameState.currentContract}');
       }
     } catch (e) {
       if (kDebugMode) {
@@ -671,6 +687,65 @@ class MultiplayerService {
   void _handlePong(MultiplayerMessage message) {
     if (kDebugMode) {
       print('🏓 Pong received');
+    }
+  }
+
+  /// Send contract selection to server
+  Future<void> selectContract(String contract) async {
+    if (!_isConnected || _playerId == null) {
+      throw Exception('Not connected or player ID is null');
+    }
+    
+    if (_currentRoom == null) {
+      throw Exception('Not in a room');
+    }
+    
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'selectContract',
+      senderId: _playerId!,
+      roomId: _currentRoom!.id,
+      data: {
+        'roomId': _currentRoom!.id,
+        'contract': contract,
+        'gameId': _currentRoom!.currentGameId,
+      },
+      timestamp: DateTime.now(),
+    
+    );
+
+    _sendMessage(message);
+    if (kDebugMode) {
+      print('📤 Contract selection sent: $contract');
+    }
+  }
+
+  /// Send card play to server
+  Future<void> playCard(Map<String, dynamic> card) async {
+    if (!_isConnected || _playerId == null) {
+      throw Exception('Not connected or player ID is null');
+    }
+    
+    if (_currentRoom == null) {
+      throw Exception('Not in a room');
+    }
+    
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'playCard',
+      senderId: _playerId!,
+      roomId: _currentRoom!.id,
+      data: {
+        'roomId': _currentRoom!.id,
+        'card': card,
+        'gameId': _currentRoom!.currentGameId,
+      },
+      timestamp: DateTime.now(),
+    );
+    
+    _sendMessage(message);
+    if (kDebugMode) {
+      print('📤 Card play sent: ${card['suit']} ${card['rank']}');
     }
   }
 

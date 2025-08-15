@@ -184,13 +184,31 @@ const GameManager = {
       scores[player.position] = 0;
     });
 
+    // Create and shuffle deck
+    const deck = this.createDeck();
+    this.shuffleDeck(deck);
+    
+    // Deal 13 cards to each player
+    let cardIndex = 0;
+    for (let i = 0; i < 13; i++) {
+      room.players.forEach(player => {
+        if (cardIndex < deck.length) {
+          playerHands[player.position].push(deck[cardIndex]);
+          cardIndex++;
+        }
+      });
+    }
+    
+    // Find the player with the lowest spade to be the first king
+    const firstKing = this.findFirstKing(playerHands, room.players);
+
     return {
       gameId: gameId,
       roomId: room.id,
       phase: 'contractSelection',
       currentContract: null,
-      currentPlayer: 'south',
-      currentKing: 'south',
+      currentPlayer: firstKing,
+      currentKing: firstKing,
       round: 1,
       kingdom: 1,
       scores: scores,
@@ -243,10 +261,25 @@ const GameManager = {
       throw new Error('No active game');
     }
 
+    console.log(`🎯 GameManager.selectContract called:`);
+    console.log(`   - Player: ${playerId}`);
+    console.log(`   - Room: ${roomId}`);
+    console.log(`   - Contract: ${contract}`);
+    console.log(`   - Game state before: phase=${room.currentGame.phase}, contract=${room.currentGame.currentContract}`);
+
     const gameState = room.currentGame;
     gameState.currentContract = contract;
     gameState.phase = 'playing';
+    
+    // Set the current player to the next player after the king (clockwise)
+    const positions = ['south', 'west', 'north', 'east'];
+    const currentKingIndex = positions.indexOf(gameState.currentKing);
+    const nextPlayerIndex = (currentKingIndex + 1) % positions.length;
+    gameState.currentPlayer = positions[nextPlayerIndex];
+    
     gameState.lastUpdated = new Date();
+
+    console.log(`   - Game state after: phase=${gameState.phase}, contract=${gameState.currentContract}, currentPlayer=${gameState.currentPlayer}`);
 
     return gameState;
   },
@@ -365,6 +398,61 @@ const GameManager = {
       room: room,
       kickedPlayer: targetPlayer
     };
+  },
+
+  // Create a standard deck of 52 cards
+  createDeck() {
+    const suits = ['hearts', 'diamonds', 'clubs', 'spades'];
+    const ranks = ['two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'jack', 'queen', 'king', 'ace'];
+    const deck = [];
+    
+    suits.forEach(suit => {
+      ranks.forEach(rank => {
+        deck.push({ suit, rank });
+      });
+    });
+    
+    return deck;
+  },
+
+  // Shuffle deck using Fisher-Yates algorithm
+  shuffleDeck(deck) {
+    for (let i = deck.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+  },
+
+  // Find the player with the lowest spade to be the first king
+  findFirstKing(playerHands, players) {
+    let lowestSpade = null;
+    let firstKingPosition = 'south'; // default fallback
+    
+    // Define rank values for comparison (2 is lowest, ace is highest)
+    const rankValues = {
+      'two': 2, 'three': 3, 'four': 4, 'five': 5, 'six': 6, 'seven': 7,
+      'eight': 8, 'nine': 9, 'ten': 10, 'jack': 11, 'queen': 12, 'king': 13, 'ace': 14
+    };
+    
+    // Check each player's hand for spades
+    players.forEach(player => {
+      const hand = playerHands[player.position];
+      if (hand) {
+        hand.forEach(card => {
+          if (card.suit === 'spades') {
+            const cardValue = rankValues[card.rank] || 15;
+            if (lowestSpade === null || cardValue < lowestSpade.value) {
+              lowestSpade = { value: cardValue, card: card };
+              firstKingPosition = player.position;
+            }
+          }
+        });
+      }
+    });
+    
+    console.log(`👑 First king determined: ${firstKingPosition} (has lowest spade: ${lowestSpade ? lowestSpade.card.rank + ' of spades' : 'none found'})`);
+    return firstKingPosition;
   },
 };
 
@@ -780,7 +868,8 @@ function handleStartGame(ws, playerId, message) {
     roomId: roomId,
     data: { 
       gameState: gameState,
-      message: 'Game has started!'
+      message: 'Game has started!',
+      room: room  // Include room data for navigation
     },
     timestamp: new Date().toISOString()
   });
@@ -803,7 +892,19 @@ function handlePlayCard(ws, playerId, message) {
 
 function handleSelectContract(ws, playerId, message) {
   const { roomId, contract, gameId } = message.data;
+  
+  console.log(`🎯 Contract selection received:`);
+  console.log(`   - Player: ${playerId}`);
+  console.log(`   - Room: ${roomId}`);
+  console.log(`   - Contract: ${contract}`);
+  console.log(`   - Game ID: ${gameId}`);
+  
   const gameState = GameManager.selectContract(playerId, roomId, contract);
+  
+  console.log(`🎯 Updated game state:`);
+  console.log(`   - Phase: ${gameState.phase}`);
+  console.log(`   - Current contract: ${gameState.currentContract}`);
+  console.log(`   - Current player: ${gameState.currentPlayer}`);
 
   // Broadcast game state update
   broadcastToRoom(roomId, {
@@ -814,6 +915,8 @@ function handleSelectContract(ws, playerId, message) {
     data: { gameState: gameState },
     timestamp: new Date().toISOString()
   });
+  
+  console.log(`📤 Game state update broadcasted to room ${roomId}`);
 }
 
 function handleChatMessage(ws, playerId, message) {

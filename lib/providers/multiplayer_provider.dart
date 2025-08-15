@@ -31,6 +31,9 @@ class MultiplayerProvider with ChangeNotifier {
   bool get isInRoom => _currentRoom != null;
   bool get isGameActive => _currentGameState != null;
   
+  // Service getter
+  MultiplayerService get multiplayerService => _multiplayerService;
+  
   // Stream getters
   Stream<Map<String, dynamic>> get gameStartedStream => _multiplayerService.gameStartedStream;
 
