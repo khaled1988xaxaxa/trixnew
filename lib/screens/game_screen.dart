@@ -3,11 +3,13 @@ import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import '../providers/game_provider.dart';
 import '../providers/ai_logging_provider.dart';
+import '../providers/multiplayer_provider.dart';
 import '../models/game.dart';
 import '../models/player.dart';
 import '../models/ai_player.dart';
 import '../models/card.dart' as game_card;
 import '../models/game_log_models.dart';
+import '../models/multiplayer_models.dart';
 import '../widgets/playing_card_widget.dart';
 import '../widgets/contract_selection_widget.dart';
 import '../widgets/ai_difficulty_indicator.dart';
@@ -36,13 +38,18 @@ class _GameScreenState extends State<GameScreen> {
   void didChangeDependencies() {
     super.didChangeDependencies();
     
-    // Check if we have AI opponents passed as arguments
+    // Check arguments passed to the game screen
     final arguments = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
-    if (arguments != null && arguments.containsKey('aiOpponents')) {
-      if (kDebugMode) print('🎮 GameScreen received AI opponents arguments');
+    if (arguments != null) {
+      if (kDebugMode) print('🎮 GameScreen received arguments: ${arguments.keys}');
+      
       // Use post-frame callback to avoid setState during build
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _setupGameWithAIOpponents(arguments);
+        if (arguments.containsKey('isMultiplayer') && arguments['isMultiplayer'] == true) {
+          _setupMultiplayerGame(arguments);
+        } else if (arguments.containsKey('aiOpponents')) {
+          _setupGameWithAIOpponents(arguments);
+        }
       });
     }
   }
@@ -101,6 +108,66 @@ class _GameScreenState extends State<GameScreen> {
     }
   }
 
+  Future<void> _setupMultiplayerGame(Map<String, dynamic> arguments) async {
+    final gameProvider = Provider.of<GameProvider>(context, listen: false);
+    
+    // Don't create game if one already exists
+    if (gameProvider.hasActiveGame) {
+      if (kDebugMode) print('🎮 Multiplayer game already exists, skipping setup');
+      return;
+    }
+    
+    try {
+      final room = arguments['room'] as GameRoom?;
+      if (room == null) {
+        if (kDebugMode) print('❌ No room data provided for multiplayer game');
+        return;
+      }
+      
+      if (kDebugMode) print('🎮 Setting up multiplayer game for room: ${room.name}');
+      
+      // Convert multiplayer PlayerSessions to game Players
+      final players = <Player>[];
+      for (final playerSession in room.players) {
+        final player = Player(
+          id: playerSession.id,
+          name: playerSession.name,
+          position: playerSession.position,
+          isBot: playerSession.isAI,
+        );
+        players.add(player);
+      }
+      
+      if (players.isEmpty) {
+        if (kDebugMode) print('❌ No players found in room');
+        return;
+      }
+      
+      // Find the human player (current player)
+      final multiplayerProvider = Provider.of<MultiplayerProvider>(context, listen: false);
+      final currentPlayerId = multiplayerProvider.playerId;
+      final humanPlayer = players.firstWhere(
+        (p) => p.id == currentPlayerId,
+        orElse: () => players.first,
+      );
+      
+      // Get other players (both human and AI)
+      final otherPlayers = players.where((p) => p.id != humanPlayer.id).toList();
+      
+      if (kDebugMode) {
+        print('🎮 Human player: ${humanPlayer.name} (${humanPlayer.position.name})');
+        print('🎮 Other players: ${otherPlayers.map((p) => '${p.name} (${p.position.name})').join(', ')}');
+      }
+      
+      // Start the multiplayer game
+      await gameProvider.startNewGame(humanPlayer, otherPlayers);
+      
+      if (kDebugMode) print('✅ Multiplayer game setup complete');
+    } catch (e) {
+      if (kDebugMode) print('❌ Error setting up multiplayer game: $e');
+    }
+  }
+
   /// Check if the game state is valid and fix if needed
   Future<void> _checkAndFixGameState() async {
     if (_isCheckingGameState) return;
@@ -109,6 +176,12 @@ class _GameScreenState extends State<GameScreen> {
     // Wait a bit to allow game setup to complete
     await Future.delayed(const Duration(milliseconds: 500));
     
+    // Check if widget is still mounted before accessing context
+    if (!mounted) {
+      _isCheckingGameState = false;
+      return;
+    }
+    
     final gameProvider = Provider.of<GameProvider>(context, listen: false);
     
     if (!gameProvider.hasActiveGame) {
@@ -116,8 +189,8 @@ class _GameScreenState extends State<GameScreen> {
         print('❌ Game screen loaded but no active game found after delay!');
       }
       
-      // Show error dialog only if we're sure there's no game being set up
-      if (!gameProvider.isLoading) {
+      // Show error dialog only if we're sure there's no game being set up and widget is still mounted
+      if (!gameProvider.isLoading && mounted) {
         showDialog(
           context: context,
           barrierDismissible: false,
@@ -127,8 +200,10 @@ class _GameScreenState extends State<GameScreen> {
             actions: [
               TextButton(
                 onPressed: () {
-                  Navigator.of(context).pop();
-                  Navigator.of(context).pop(); // Return to home screen
+                  if (mounted) {
+                    Navigator.of(context).pop();
+                    Navigator.of(context).pop(); // Return to home screen
+                  }
                 },
                 child: const Text('Yes'),
               ),

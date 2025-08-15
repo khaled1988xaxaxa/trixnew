@@ -8,10 +8,7 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/multiplayer_models.dart';
-import '../models/game.dart';
-import '../models/card.dart';
 
-/// Multiplayer service for real-time game communication
 class MultiplayerService {
   static MultiplayerService? _instance;
   static MultiplayerService get instance => _instance ??= MultiplayerService._();
@@ -21,249 +18,306 @@ class MultiplayerService {
   // Connection management
   WebSocketChannel? _channel;
   Timer? _pingTimer;
-  Timer? _reconnectTimer;
   bool _isConnected = false;
-  bool _isConnecting = false;
+  String? _playerId;
+  String? _playerName;
   String? _currentRoomId;
-  String? _currentPlayerId;
-  
-  // Configuration
-  static const String _serverUrl = 'ws://192.168.0.136:8080'; // Your server URL
-  static const Duration _pingInterval = Duration(seconds: 30);
-  static const Duration _reconnectDelay = Duration(seconds: 5);
-  
-  // State management
   GameRoom? _currentRoom;
   MultiplayerGameState? _currentGameState;
-  final List<GameRoom> _availableRooms = [];
   
-  // Stream controllers for UI updates
+  // Stream controllers for real-time updates
+  final StreamController<MultiplayerMessage> _messageController = StreamController<MultiplayerMessage>.broadcast();
   final StreamController<GameRoom> _roomUpdateController = StreamController<GameRoom>.broadcast();
   final StreamController<MultiplayerGameState> _gameStateController = StreamController<MultiplayerGameState>.broadcast();
-  final StreamController<List<GameRoom>> _roomsListController = StreamController<List<GameRoom>>.broadcast();
-  final StreamController<MultiplayerMessage> _messageController = StreamController<MultiplayerMessage>.broadcast();
-  final StreamController<ConnectionStatus> _connectionController = StreamController<ConnectionStatus>.broadcast();
+  final StreamController<Map<String, dynamic>> _gameStartedController = StreamController<Map<String, dynamic>>.broadcast();
+  final StreamController<Map<String, dynamic>> _completers = StreamController<Map<String, dynamic>>();
+  
+  // Response tracking for request-response pattern
+  final Map<String, Completer<MultiplayerMessage>> _pendingRequests = {};
+  
+  // Public streams
+  Stream<MultiplayerMessage> get messageStream => _messageController.stream;
+  Stream<GameRoom> get roomUpdateStream => _roomUpdateController.stream;
+  Stream<MultiplayerGameState> get gameStateStream => _gameStateController.stream;
+  Stream<Map<String, dynamic>> get gameStartedStream => _gameStartedController.stream;
   
   // Getters
   bool get isConnected => _isConnected;
-  bool get isConnecting => _isConnecting;
-  String? get currentPlayerId => _currentPlayerId;
+  String? get playerId => _playerId;
+  String? get playerName => _playerName;
+  String? get currentRoomId => _currentRoomId;
   GameRoom? get currentRoom => _currentRoom;
   MultiplayerGameState? get currentGameState => _currentGameState;
-  List<GameRoom> get availableRooms => List.unmodifiable(_availableRooms);
-  
-  // Streams
-  Stream<GameRoom> get roomUpdates => _roomUpdateController.stream;
-  Stream<MultiplayerGameState> get gameStateUpdates => _gameStateController.stream;
-  Stream<List<GameRoom>> get roomsListUpdates => _roomsListController.stream;
-  Stream<MultiplayerMessage> get messages => _messageController.stream;
-  Stream<ConnectionStatus> get connectionStatus => _connectionController.stream;
 
-  /// Initialize the multiplayer service
-  Future<void> initialize() async {
-    if (kDebugMode) {
-      print('🌐 Multiplayer Service initializing...');
-    }
-    
-    await _loadPlayerId();
-    await _checkConnectivity();
-    
-    if (kDebugMode) {
-      print('✅ Multiplayer Service initialized');
-    }
-  }
-
-  /// Connect to the multiplayer server
-  Future<bool> connect() async {
-    if (_isConnected || _isConnecting) return _isConnected;
-    
-    _isConnecting = true;
-    _connectionController.add(ConnectionStatus.connecting);
-    
-    try {
+  Future<bool> connect({String? playerName}) async {
+    if (_isConnected) {
       if (kDebugMode) {
-        print('🔌 Connecting to multiplayer server: $_serverUrl');
+        print('🔗 Already connected to multiplayer server');
       }
+      return true;
+    }
+
+    try {
+      // Get server URL based on platform
+      final serverUrl = await _getServerUrl();
       
-      _channel = WebSocketChannel.connect(Uri.parse(_serverUrl));
-      
-      // Listen for messages
+      if (kDebugMode) {
+        print('🔗 Connecting to: $serverUrl');
+      }
+
+      _channel = WebSocketChannel.connect(
+        Uri.parse(serverUrl),
+      );
+
+      // Set up message handling
       _channel!.stream.listen(
         _handleMessage,
-        onError: _handleWebSocketError,
-        onDone: _handleDisconnect,
+        onError: (error) {
+          if (kDebugMode) {
+            print('❌ WebSocket error: $error');
+          }
+          _handleDisconnect();
+        },
+        onDone: () {
+          if (kDebugMode) {
+            print('🔌 WebSocket connection closed');
+          }
+          _handleDisconnect();
+        },
       );
+
+      // Generate player ID and store player name
+      _playerId = const Uuid().v4();
+      _playerName = playerName ?? 'Player ${_playerId!.substring(0, 8)}';
       
+      // Save player info
+      await _savePlayerInfo();
+
       _isConnected = true;
-      _isConnecting = false;
-      _connectionController.add(ConnectionStatus.connected);
       
       // Start ping timer
       _startPingTimer();
-      
-      // Send authentication
-      await _sendMessage(MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.ping.name,
-        senderId: _currentPlayerId ?? 'anonymous',
-        roomId: _currentRoomId ?? '',
-        data: {'playerId': _currentPlayerId},
-      ));
-      
+
       if (kDebugMode) {
-        print('✅ Connected to multiplayer server');
+        print('✅ Connected to multiplayer server as $_playerName');
       }
-      
+
       return true;
-      
     } catch (e) {
-      _isConnecting = false;
-      _connectionController.add(ConnectionStatus.error);
-      
       if (kDebugMode) {
         print('❌ Failed to connect to multiplayer server: $e');
       }
-      
-      // Schedule reconnect
-      _scheduleReconnect();
       return false;
     }
   }
 
-  /// Disconnect from the server
-  Future<void> disconnect() async {
-    if (kDebugMode) {
-      print('🔌 Disconnecting from multiplayer server');
+  Future<String> _getServerUrl() async {
+    // Check if we're on web or mobile
+    final connectivityResult = await Connectivity().checkConnectivity();
+    
+    if (kIsWeb) {
+      // For web, use localhost
+      return 'ws://localhost:8081';
+    } else {
+      // For mobile, use the computer's IP address
+      return 'ws://192.168.0.80:8081';
     }
-    
-    _stopPingTimer();
-    _stopReconnectTimer();
-    
-    if (_channel != null) {
-      await _channel!.sink.close(status.goingAway);
-      _channel = null;
-    }
-    
+  }
+
+  void _startPingTimer() {
+    _pingTimer?.cancel();
+    _pingTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (_isConnected) {
+        _sendPing();
+      }
+    });
+  }
+
+  void _sendPing() {
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'ping',
+      senderId: _playerId!,
+      roomId: _currentRoomId ?? '',
+      data: {'timestamp': DateTime.now().toIso8601String()},
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
+  }
+
+  Future<void> _savePlayerInfo() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('multiplayer_player_id', _playerId!);
+    await prefs.setString('multiplayer_player_name', _playerName!);
+  }
+
+  Future<void> _loadPlayerInfo() async {
+    final prefs = await SharedPreferences.getInstance();
+    _playerId = prefs.getString('multiplayer_player_id');
+    _playerName = prefs.getString('multiplayer_player_name');
+  }
+
+  void disconnect() {
+    _pingTimer?.cancel();
+    _channel?.sink.close(status.normalClosure);
+    _handleDisconnect();
+  }
+
+  void _handleDisconnect() {
     _isConnected = false;
-    _isConnecting = false;
-    _connectionController.add(ConnectionStatus.disconnected);
+    _playerId = null;
+    _playerName = null;
+    _currentRoomId = null;
+    _currentRoom = null;
+    _currentGameState = null;
+    _pingTimer?.cancel();
+    
+    // Complete any pending requests with timeout
+    for (final completer in _pendingRequests.values) {
+      if (!completer.isCompleted) {
+        completer.completeError('Connection lost');
+      }
+    }
+    _pendingRequests.clear();
+  }
+
+  void _sendMessage(MultiplayerMessage message) {
+    if (_channel != null && _isConnected) {
+      final jsonString = jsonEncode(message.toJson());
+      _channel!.sink.add(jsonString);
+      
+      if (kDebugMode) {
+        print('📤 Sent: ${message.type}');
+      }
+    }
+  }
+
+  Future<MultiplayerMessage?> _waitForResponse(String messageId, {Duration timeout = const Duration(seconds: 5)}) async {
+    final completer = Completer<MultiplayerMessage>();
+    _pendingRequests[messageId] = completer;
+    
+    try {
+      return await completer.future.timeout(timeout);
+    } catch (e) {
+      _pendingRequests.remove(messageId);
+      if (kDebugMode) {
+        print('⏰ Request timeout for message: $messageId');
+      }
+      return null;
+    }
+  }
+
+  Future<GameRoom?> createRoom(String roomName, {int maxPlayers = 4}) async {
+    if (!_isConnected || _playerId == null) {
+      throw Exception('Not connected to server');
+    }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'createRoom',
+      senderId: _playerId!,
+      roomId: '',
+      data: {
+        'roomName': roomName,
+        'maxPlayers': maxPlayers,
+        'playerName': _playerName,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
     
     if (kDebugMode) {
-      print('✅ Disconnected from multiplayer server');
+      print('🏠 Creating room: $roomName');
     }
-  }
 
-  /// Create a new game room
-  Future<GameRoom?> createRoom({
-    required String name,
-    required GameRoomSettings settings,
-  }) async {
-    if (!_isConnected) {
-      if (kDebugMode) print('❌ Not connected to server');
-      return null;
-    }
+    final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
     
-    try {
-      final roomId = const Uuid().v4();
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.createRoom.name,
-        senderId: _currentPlayerId!,
-        roomId: roomId,
-        data: {
-          'name': name,
-          'settings': settings.toJson(),
-          'hostId': _currentPlayerId,
-        },
-      );
+    if (response != null && response.data['success'] == true) {
+      final room = GameRoom.fromJson(response.data['room']);
+      _currentRoom = room;
+      _currentRoomId = room.id;
       
-      await _sendMessage(message);
-      
-      // Wait for room creation response
-      final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
-      
-      if (response != null && response.data['success'] == true) {
-        final room = GameRoom.fromJson(response.data['room']);
-        _currentRoom = room;
-        _currentRoomId = room.id;
-        
-        if (kDebugMode) {
-          print('✅ Created room: ${room.name}');
-        }
-        
-        return room;
-      }
-      
-      return null;
-      
-    } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to create room: $e');
+        print('✅ Created room: ${room.name}');
+      }
+      
+      return room;
+    } else {
+      if (kDebugMode) {
+        print('❌ Failed to create room: ${response?.data['error'] ?? 'Unknown error'}');
       }
       return null;
     }
   }
 
-  /// Join an existing game room
-  Future<bool> joinRoom(String roomId, {String? password}) async {
-    if (!_isConnected) {
-      if (kDebugMode) print('❌ Not connected to server');
-      return false;
+  Future<GameRoom?> joinRoom(String roomId) async {
+    if (!_isConnected || _playerId == null) {
+      throw Exception('Not connected to server');
     }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'joinRoom',
+      senderId: _playerId!,
+      roomId: roomId,
+      data: {
+        'roomId': roomId,
+        'playerName': _playerName,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
     
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.joinRoom.name,
-        senderId: _currentPlayerId!,
-        roomId: roomId,
-        data: {
-          'password': password,
-        },
-      );
+    if (kDebugMode) {
+      print('🏃 Joining room: $roomId');
+    }
+
+    final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
+    
+    if (response != null && response.data['success'] == true) {
+      final room = GameRoom.fromJson(response.data['room']);
+      _currentRoom = room;
+      _currentRoomId = room.id;
       
-      await _sendMessage(message);
-      
-      // Wait for join response
-      final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
-      
-      if (response != null && response.data['success'] == true) {
-        final room = GameRoom.fromJson(response.data['room']);
-        _currentRoom = room;
-        _currentRoomId = room.id;
-        
-        if (kDebugMode) {
-          print('✅ Joined room: ${room.name}');
-        }
-        
-        return true;
-      }
-      
-      return false;
-      
-    } catch (e) {
       if (kDebugMode) {
-        print('❌ Failed to join room: $e');
+        print('✅ Joined room: ${room.name}');
       }
-      return false;
+      
+      return room;
+    } else {
+      if (kDebugMode) {
+        print('❌ Failed to join room: ${response?.data['error'] ?? 'Unknown error'}');
+      }
+      return null;
     }
   }
 
-  /// Leave the current room
-  Future<void> leaveRoom() async {
-    if (_currentRoomId == null) return;
+  Future<bool> leaveRoom() async {
+    if (!_isConnected || _playerId == null || _currentRoomId == null) {
+      return false;
+    }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'leaveRoom',
+      senderId: _playerId!,
+      roomId: _currentRoomId!,
+      data: {},
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
     
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.leaveRoom.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId!,
-        data: {},
-      );
-      
-      await _sendMessage(message);
-      
+    if (kDebugMode) {
+      print('🚪 Leaving room: $_currentRoomId');
+    }
+
+    final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 5));
+    
+    if (response != null && response.data['success'] == true) {
       _currentRoom = null;
       _currentRoomId = null;
       _currentGameState = null;
@@ -272,233 +326,169 @@ class MultiplayerService {
         print('✅ Left room');
       }
       
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to leave room: $e');
-      }
-    }
-  }
-
-  /// Get list of available rooms
-  Future<List<GameRoom>> getAvailableRooms() async {
-    if (!_isConnected) {
-      if (kDebugMode) print('❌ Not connected to server');
-      return [];
+      return true;
     }
     
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: 'getRooms',
-        senderId: _currentPlayerId!,
-        roomId: '',
-        data: {},
-      );
-      
-      await _sendMessage(message);
-      
-      // Wait for rooms list response
-      final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
-      
-      if (response != null && response.data['success'] == true) {
-        final rooms = (response.data['rooms'] as List)
-            .map((r) => GameRoom.fromJson(r))
-            .toList();
-        
-        _availableRooms.clear();
-        _availableRooms.addAll(rooms);
-        _roomsListController.add(rooms);
-        
-        return rooms;
-      }
-      
-      return [];
-      
-    } catch (e) {
+    return false;
+  }
+
+  Future<bool> setReady(bool isReady) async {
+    if (!_isConnected || _playerId == null || _currentRoomId == null) {
       if (kDebugMode) {
-        print('❌ Failed to get rooms: $e');
+        print('❌ Cannot set ready: not connected or not in room');
+        print('   Connected: $_isConnected, PlayerId: $_playerId, RoomId: $_currentRoomId');
       }
-      return [];
+      return false;
+    }
+
+    if (kDebugMode) {
+      print('🔄 Setting ready status to $isReady in room $_currentRoomId');
+    }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'playerReady',
+      senderId: _playerId!,
+      roomId: _currentRoomId!,
+      data: {
+        'roomId': _currentRoomId,
+        'isReady': isReady,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
+    
+    if (kDebugMode) {
+      print('📤 Sent ready message with roomId: $_currentRoomId');
+    }
+
+    // For ready status, we don't wait for response as it's handled via room updates
+    return true;
+  }
+
+  Future<bool> kickPlayer(String targetPlayerId) async {
+    if (!_isConnected || _playerId == null || _currentRoomId == null) {
+      if (kDebugMode) {
+        print('❌ Cannot kick player: not connected or not in room');
+      }
+      return false;
+    }
+
+    // Check if current player is host
+    if (_currentRoom?.hostId != _playerId) {
+      if (kDebugMode) {
+        print('❌ Cannot kick player: not the room host');
+      }
+      return false;
+    }
+
+    if (kDebugMode) {
+      print('👢 Kicking player $targetPlayerId from room $_currentRoomId');
+    }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'kickPlayer',
+      senderId: _playerId!,
+      roomId: _currentRoomId!,
+      data: {
+        'roomId': _currentRoomId,
+        'targetPlayerId': targetPlayerId,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
+    
+    final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 5));
+    
+    if (response != null && response.data['success'] == true) {
+      if (kDebugMode) {
+        final kickedPlayer = response.data['kickedPlayer'];
+        print('✅ Successfully kicked ${kickedPlayer['name']} (${kickedPlayer['isAI'] ? 'AI' : 'Human'})');
+      }
+      return true;
+    } else {
+      if (kDebugMode) {
+        print('❌ Failed to kick player: ${response?.data['error'] ?? 'Unknown error'}');
+      }
+      return false;
     }
   }
 
-  /// Start a game in the current room
   Future<bool> startGame() async {
-    if (_currentRoom == null || !_currentRoom!.canStart) {
-      if (kDebugMode) print('❌ Cannot start game: room not ready');
+    if (!_isConnected || _playerId == null || _currentRoomId == null) {
+      if (kDebugMode) {
+        print('❌ Cannot start game: not connected or not in room');
+      }
       return false;
     }
-    
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.startGame.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId!,
-        data: {},
-      );
-      
-      await _sendMessage(message);
-      
+
+    // Check if current player is host
+    if (_currentRoom?.hostId != _playerId) {
       if (kDebugMode) {
-        print('🎮 Starting game...');
+        print('❌ Cannot start game: not the room host');
       }
-      
+      return false;
+    }
+
+    if (kDebugMode) {
+      print('🎮 Starting game in room $_currentRoomId');
+    }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'startGame',
+      senderId: _playerId!,
+      roomId: _currentRoomId!,
+      data: {
+        'roomId': _currentRoomId,
+      },
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
+    
+    final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
+    
+    if (response != null && response.data['success'] == true) {
+      if (kDebugMode) {
+        print('✅ Successfully started game');
+      }
       return true;
-      
-    } catch (e) {
+    } else {
       if (kDebugMode) {
-        print('❌ Failed to start game: $e');
+        print('❌ Failed to start game: ${response?.data['error'] ?? 'Unknown error'}');
       }
       return false;
     }
   }
 
-  /// Play a card in the current game
-  Future<bool> playCard(Card card) async {
-    if (_currentGameState == null) {
-      if (kDebugMode) print('❌ No active game');
-      return false;
+  Future<List<GameRoom>> getAvailableRooms() async {
+    if (!_isConnected || _playerId == null) {
+      return [];
+    }
+
+    final message = MultiplayerMessage(
+      id: const Uuid().v4(),
+      type: 'getRooms',
+      senderId: _playerId!,
+      roomId: '',
+      data: {},
+      timestamp: DateTime.now(),
+    );
+
+    _sendMessage(message);
+    
+    final response = await _waitForResponse(message.id, timeout: const Duration(seconds: 10));
+    
+    if (response != null && response.data['rooms'] != null) {
+      final roomsData = response.data['rooms'] as List;
+      return roomsData.map((roomJson) => GameRoom.fromJson(roomJson)).toList();
     }
     
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.cardPlayed.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId!,
-        data: {
-          'card': card.toJson(),
-          'gameId': _currentGameState!.gameId,
-        },
-      );
-      
-      await _sendMessage(message);
-      
-      if (kDebugMode) {
-        print('🃏 Playing card: ${card.rank.englishName} of ${card.suit.englishName}');
-      }
-      
-      return true;
-      
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to play card: $e');
-      }
-      return false;
-    }
-  }
-
-  /// Select a contract
-  Future<bool> selectContract(TrexContract contract) async {
-    if (_currentGameState == null) {
-      if (kDebugMode) print('❌ No active game');
-      return false;
-    }
-    
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.contractSelected.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId!,
-        data: {
-          'contract': contract.name,
-          'gameId': _currentGameState!.gameId,
-        },
-      );
-      
-      await _sendMessage(message);
-      
-      if (kDebugMode) {
-        print('📋 Selected contract: ${contract.englishName}');
-      }
-      
-      return true;
-      
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to select contract: $e');
-      }
-      return false;
-    }
-  }
-
-  /// Send a chat message
-  Future<void> sendChatMessage(String message) async {
-    if (_currentRoomId == null) return;
-    
-    try {
-      final multiplayerMessage = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.chatMessage.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId!,
-        data: {
-          'message': message,
-          'timestamp': DateTime.now().toIso8601String(),
-        },
-      );
-      
-      await _sendMessage(multiplayerMessage);
-      
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to send chat message: $e');
-      }
-    }
-  }
-
-  /// Set player ready status
-  Future<void> setReady(bool isReady) async {
-    if (_currentRoomId == null) return;
-    
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.playerReady.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId!,
-        data: {
-          'isReady': isReady,
-        },
-      );
-      
-      await _sendMessage(message);
-      
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to set ready status: $e');
-      }
-    }
-  }
-
-  // Private methods
-
-  Future<void> _loadPlayerId() async {
-    final prefs = await SharedPreferences.getInstance();
-    _currentPlayerId = prefs.getString('player_id');
-    
-    if (_currentPlayerId == null) {
-      _currentPlayerId = const Uuid().v4();
-      await prefs.setString('player_id', _currentPlayerId!);
-    }
-  }
-
-  Future<void> _checkConnectivity() async {
-    final connectivityResult = await Connectivity().checkConnectivity();
-    if (connectivityResult == ConnectivityResult.none) {
-      _connectionController.add(ConnectionStatus.noInternet);
-    }
-  }
-
-  Future<void> _sendMessage(MultiplayerMessage message) async {
-    if (_channel == null) {
-      throw Exception('Not connected to server');
-    }
-    
-    final jsonMessage = jsonEncode(message.toJson());
-    _channel!.sink.add(jsonMessage);
+    return [];
   }
 
   void _handleMessage(dynamic data) {
@@ -512,9 +502,34 @@ class MultiplayerService {
       
       _messageController.add(message);
       
+      // Check if this is a response to a pending request
+      if (message.type == 'response' && message.data.containsKey('responseTo')) {
+        final responseTo = message.data['responseTo'];
+        if (kDebugMode) {
+          print('🔍 Response received for message ID: $responseTo');
+          print('🔍 Pending requests: ${_pendingRequests.keys.toList()}');
+        }
+        if (_pendingRequests.containsKey(responseTo)) {
+          final completer = _pendingRequests.remove(responseTo);
+          if (completer != null && !completer.isCompleted) {
+            if (kDebugMode) {
+              print('✅ Completing request: $responseTo');
+            }
+            completer.complete(message);
+          }
+        } else {
+          if (kDebugMode) {
+            print('❌ No pending request found for: $responseTo');
+          }
+        }
+      }
+      
       switch (message.type) {
         case 'roomUpdate':
           _handleRoomUpdate(message);
+          break;
+        case 'gameStarted':
+          _handleGameStarted(message);
           break;
         case 'gameStateUpdate':
           _handleGameStateUpdate(message);
@@ -524,6 +539,12 @@ class MultiplayerService {
           break;
         case 'playerLeft':
           _handlePlayerLeft(message);
+          break;
+        case 'kicked':
+          _handleKicked(message);
+          break;
+        case 'playerKicked':
+          _handlePlayerKicked(message);
           break;
         case 'error':
           _handleError(message);
@@ -542,6 +563,11 @@ class MultiplayerService {
 
   void _handleRoomUpdate(MultiplayerMessage message) {
     try {
+      if (kDebugMode) {
+        print('🔍 Raw room data: ${message.data}');
+        print('🔍 Room object: ${message.data['room']}');
+      }
+      
       final room = GameRoom.fromJson(message.data['room']);
       _currentRoom = room;
       _roomUpdateController.add(room);
@@ -552,6 +578,33 @@ class MultiplayerService {
     } catch (e) {
       if (kDebugMode) {
         print('❌ Error handling room update: $e');
+      }
+    }
+  }
+
+  void _handleGameStarted(MultiplayerMessage message) {
+    try {
+      if (kDebugMode) {
+        print('🎮 Game started! ${message.data['message']}');
+      }
+      
+      // Emit game started event
+      _gameStartedController.add({
+        'gameState': message.data['gameState'],
+        'message': message.data['message'],
+        'room': _currentRoom?.toJson(),
+      });
+      
+      // Handle game state if provided
+      if (message.data['gameState'] != null) {
+        if (kDebugMode) {
+          print('🎯 Game state received');
+        }
+      }
+      
+    } catch (e) {
+      if (kDebugMode) {
+        print('❌ Error handling game started: $e');
       }
     }
   }
@@ -584,6 +637,31 @@ class MultiplayerService {
     }
   }
 
+  void _handleKicked(MultiplayerMessage message) {
+    final roomName = message.data['roomName'] ?? 'Unknown Room';
+    final reason = message.data['reason'] ?? 'You were kicked from the room';
+    
+    if (kDebugMode) {
+      print('👢 You were kicked from room: $roomName');
+      print('   Reason: $reason');
+    }
+    
+    // Clear current room info since we were kicked
+    _currentRoom = null;
+    _currentRoomId = null;
+    _currentGameState = null;
+  }
+
+  void _handlePlayerKicked(MultiplayerMessage message) {
+    final kickedPlayerName = message.data['kickedPlayerName'];
+    final isAI = message.data['isAI'] ?? false;
+    final kickedBy = message.data['kickedBy'] ?? 'Host';
+    
+    if (kDebugMode) {
+      print('👢 Player kicked: $kickedPlayerName (${isAI ? 'AI' : 'Human'}) by $kickedBy');
+    }
+  }
+
   void _handleError(MultiplayerMessage message) {
     if (kDebugMode) {
       print('❌ Server error: ${message.data['error']}');
@@ -596,101 +674,12 @@ class MultiplayerService {
     }
   }
 
-  void _handleWebSocketError(dynamic error) {
-    if (kDebugMode) {
-      print('❌ WebSocket error: $error');
-    }
-    _connectionController.add(ConnectionStatus.error);
-  }
-
-  void _handleDisconnect() {
-    if (kDebugMode) {
-      print('🔌 WebSocket disconnected');
-    }
-    
-    _isConnected = false;
-    _connectionController.add(ConnectionStatus.disconnected);
-    _scheduleReconnect();
-  }
-
-  void _startPingTimer() {
-    _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(_pingInterval, (timer) {
-      if (_isConnected) {
-        _sendPing();
-      }
-    });
-  }
-
-  void _stopPingTimer() {
-    _pingTimer?.cancel();
-    _pingTimer = null;
-  }
-
-  void _sendPing() async {
-    try {
-      final message = MultiplayerMessage(
-        id: const Uuid().v4(),
-        type: MessageType.ping.name,
-        senderId: _currentPlayerId!,
-        roomId: _currentRoomId ?? '',
-        data: {},
-      );
-      
-      await _sendMessage(message);
-    } catch (e) {
-      if (kDebugMode) {
-        print('❌ Failed to send ping: $e');
-      }
-    }
-  }
-
-  void _scheduleReconnect() {
-    _stopReconnectTimer();
-    _reconnectTimer = Timer(_reconnectDelay, () {
-      if (!_isConnected && !_isConnecting) {
-        connect();
-      }
-    });
-  }
-
-  void _stopReconnectTimer() {
-    _reconnectTimer?.cancel();
-    _reconnectTimer = null;
-  }
-
-  Future<MultiplayerMessage?> _waitForResponse(String messageId, {Duration? timeout}) async {
-    final completer = Completer<MultiplayerMessage?>();
-    final timer = timeout != null ? Timer(timeout, () => completer.complete(null)) : null;
-    
-    late StreamSubscription<MultiplayerMessage> subscription;
-    subscription = _messageController.stream.listen((message) {
-      if (message.data['responseTo'] == messageId) {
-        subscription.cancel();
-        timer?.cancel();
-        completer.complete(message);
-      }
-    });
-    
-    return completer.future;
-  }
-
-  /// Dispose resources
   void dispose() {
     disconnect();
+    _messageController.close();
     _roomUpdateController.close();
     _gameStateController.close();
-    _roomsListController.close();
-    _messageController.close();
-    _connectionController.close();
+    _gameStartedController.close();
+    _completers.close();
   }
-}
-
-/// Connection status enum
-enum ConnectionStatus {
-  disconnected,
-  connecting,
-  connected,
-  error,
-  noInternet,
 }

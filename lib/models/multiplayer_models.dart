@@ -2,6 +2,15 @@ import 'player.dart';
 import 'card.dart';
 import 'game.dart';
 
+/// Connection status for multiplayer service
+enum ConnectionStatus {
+  disconnected,
+  connecting,
+  connected,
+  error,
+  noInternet,
+}
+
 /// Multiplayer room/table model
 class GameRoom {
   final String id;
@@ -32,7 +41,11 @@ class GameRoom {
   bool get isActive => status == GameRoomStatus.playing;
   
   PlayerSession? getHost() {
-    return players.firstWhere((p) => p.id == hostId);
+    try {
+      return players.firstWhere((p) => p.id == hostId);
+    } catch (e) {
+      return null;
+    }
   }
 
   PlayerSession? getPlayerById(String playerId) {
@@ -62,19 +75,21 @@ class GameRoom {
 
   factory GameRoom.fromJson(Map<String, dynamic> json) {
     return GameRoom(
-      id: json['id'],
-      name: json['name'],
-      hostId: json['hostId'],
-      players: (json['players'] as List)
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? 'Unknown Room',
+      hostId: json['hostId']?.toString() ?? '',
+      players: (json['players'] as List? ?? [])
           .map((p) => PlayerSession.fromJson(p))
           .toList(),
       status: GameRoomStatus.values.firstWhere(
         (e) => e.name == json['status'],
         orElse: () => GameRoomStatus.waiting,
       ),
-      createdAt: DateTime.parse(json['createdAt']),
+      createdAt: json['createdAt'] != null 
+          ? DateTime.parse(json['createdAt'])
+          : DateTime.now(),
       settings: GameRoomSettings.fromJson(json['settings'] ?? {}),
-      currentGameId: json['currentGameId'],
+      currentGameId: json['currentGameId']?.toString(),
     );
   }
 }
@@ -90,6 +105,7 @@ class PlayerSession {
   final DateTime? lastSeen;
   bool isReady;
   bool isHost;
+  final bool isAI;
 
   PlayerSession({
     required this.id,
@@ -101,6 +117,7 @@ class PlayerSession {
     this.lastSeen,
     this.isReady = false,
     this.isHost = false,
+    this.isAI = false,
   }) : joinedAt = joinedAt ?? DateTime.now();
 
   Map<String, dynamic> toJson() {
@@ -114,14 +131,15 @@ class PlayerSession {
       'lastSeen': lastSeen?.toIso8601String(),
       'isReady': isReady,
       'isHost': isHost,
+      'isAI': isAI,
     };
   }
 
   factory PlayerSession.fromJson(Map<String, dynamic> json) {
     return PlayerSession(
-      id: json['id'],
-      name: json['name'],
-      avatarUrl: json['avatarUrl'],
+      id: json['id']?.toString() ?? '',
+      name: json['name']?.toString() ?? 'Unknown Player',
+      avatarUrl: json['avatarUrl']?.toString(),
       position: PlayerPosition.values.firstWhere(
         (e) => e.name == json['position'],
         orElse: () => PlayerPosition.south,
@@ -130,10 +148,13 @@ class PlayerSession {
         (e) => e.name == json['status'],
         orElse: () => PlayerSessionStatus.connected,
       ),
-      joinedAt: DateTime.parse(json['joinedAt']),
+      joinedAt: json['joinedAt'] != null 
+          ? DateTime.parse(json['joinedAt'])
+          : DateTime.now(),
       lastSeen: json['lastSeen'] != null ? DateTime.parse(json['lastSeen']) : null,
       isReady: json['isReady'] ?? false,
       isHost: json['isHost'] ?? false,
+      isAI: json['isAI'] ?? false,
     );
   }
 
@@ -147,6 +168,7 @@ class PlayerSession {
     DateTime? lastSeen,
     bool? isReady,
     bool? isHost,
+    bool? isAI,
   }) {
     return PlayerSession(
       id: id ?? this.id,
@@ -158,6 +180,7 @@ class PlayerSession {
       lastSeen: lastSeen ?? this.lastSeen,
       isReady: isReady ?? this.isReady,
       isHost: isHost ?? this.isHost,
+      isAI: isAI ?? this.isAI,
     );
   }
 }

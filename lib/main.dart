@@ -13,6 +13,7 @@ import 'screens/game_screen.dart';
 import 'screens/ai_game_setup_screen.dart';
 import 'screens/logging_settings_screen.dart';
 import 'screens/multiplayer_lobby_screen.dart';
+import 'screens/multiplayer_room_screen.dart';
 
 void main() async {
   // Ensure Flutter is initialized properly to fix debugging context issues
@@ -127,6 +128,7 @@ class TrixApp extends StatelessWidget {
           '/ai-game-setup': (context) => const AIGameSetupScreen(),
           '/logging_settings': (context) => const LoggingSettingsScreen(),
           '/multiplayer-lobby': (context) => const MultiplayerLobbyScreen(),
+          '/multiplayer-room': (context) => const MultiplayerRoomScreen(),
         },
       ),
     );
