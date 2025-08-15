@@ -119,8 +119,8 @@ class MultiplayerService {
       // For web, use localhost
       return 'ws://localhost:8081';
     } else {
-      // For mobile, use the computer's IP address
-      return 'ws://192.168.0.80:8081';
+      // For mobile, use the computer's IP address and correct port
+      return 'ws://192.168.0.94:8081';
     }
   }
 
